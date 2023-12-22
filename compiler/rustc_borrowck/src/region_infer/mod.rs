@@ -761,7 +761,26 @@ impl<'tcx> RegionInferenceContext<'tcx> {
             if self.universe_compatible(scc_b, scc_a) {
                 // `A` can name everything that is in `B`, so just
                 // merge the bits.
-                self.scc_values.add_region(scc_a, scc_b);
+                let b_universally_quantified = {
+                    let mut found_quantified = false;
+                    for (rv, _) in self.definitions.iter_enumerated() {
+                        if self.constraint_sccs.scc(rv) == scc_b
+                            && self.universal_regions.is_universal_region(rv)
+                        {
+                            found_quantified = true;
+                            break;
+                        }
+                    }
+                    found_quantified
+                };
+
+                if b_universally_quantified {
+                    debug!("Universally quantified {scc_b:?} flows into {scc_a:?}!");
+                    self.scc_values.add_element(scc_a, self.universal_regions.fr_static);
+                    self.scc_values.add_region(scc_a, scc_b);
+                } else {
+                    self.scc_values.add_region(scc_a, scc_b);
+                }
             } else {
                 self.add_incompatible_universe(scc_a);
             }
@@ -1807,7 +1826,11 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         let result = {
             r == fr2 || {
                 fr2 == self.universal_regions.fr_static && self.cannot_name_placeholder(fr1, r)
-            }
+            } /*
+            || {
+            fr2 == self.universal_regions.fr_static
+            && self.universal_regions.is_universal_region(fr2)
+            } */
         };
         debug!("provides_universal_region: result = {:?}", result);
         result
