@@ -10,6 +10,7 @@ use rustc_span::Span;
 use std::fmt;
 use std::ops::Index;
 
+use crate::region_infer::RegionDefinition;
 use crate::type_check::Locations;
 use crate::universal_regions::UniversalRegions;
 
@@ -72,15 +73,26 @@ impl<'tcx> OutlivesConstraintSet<'tcx> {
     pub(crate) fn placeholders_to_static(
         &self,
         universal_regions: &UniversalRegions<'tcx>,
+        definitions: &IndexVec<RegionVid, RegionDefinition<'tcx>>,
     ) -> Self {
         let mut copy = self.clone();
-        for &c in
-            self.outlives
-                .iter()
-                .filter_map(|c| {
-                    if universal_regions.is_universal_region(c.sub) { Some(c) } else { None }
-                })
-                .dedup()
+        for &c in self
+            .outlives
+            .iter()
+            .filter_map(|c| {
+                let universes_incompatible = {
+                    let sub_universe = definitions[c.sub].universe;
+                    let sup_universe = definitions[c.sup].universe;
+                    sub_universe > sup_universe
+                };
+
+                if universes_incompatible && universal_regions.is_universal_region(c.sub) {
+                    Some(c)
+                } else {
+                    None
+                }
+            })
+            .dedup()
         {
             copy.push(OutlivesConstraint {
                 sup: c.sub,
