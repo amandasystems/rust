@@ -343,8 +343,9 @@ impl<'tcx> RegionInferenceContext<'tcx> {
             .map(|info| RegionDefinition::new(info.universe, info.origin))
             .collect();
 
-        let constraints =
-            Frozen::freeze(outlives_constraints.placeholders_to_static(&universal_regions));
+        let constraints = Frozen::freeze(
+            outlives_constraints.placeholders_to_static(&universal_regions, &definitions),
+        );
         let constraint_graph = Frozen::freeze(constraints.graph(definitions.len()));
         let fr_static = universal_regions.fr_static;
         let constraint_sccs = Rc::new(constraints.compute_sccs(&constraint_graph, fr_static));
