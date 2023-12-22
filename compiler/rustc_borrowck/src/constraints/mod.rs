@@ -1,6 +1,7 @@
 #![deny(rustc::untranslatable_diagnostic)]
 #![deny(rustc::diagnostic_outside_of_impl)]
 
+use itertools::Itertools;
 use rustc_data_structures::graph::scc::Sccs;
 use rustc_index::{IndexSlice, IndexVec};
 use rustc_middle::mir::ConstraintCategory;
@@ -10,6 +11,7 @@ use std::fmt;
 use std::ops::Index;
 
 use crate::type_check::Locations;
+use crate::universal_regions::UniversalRegions;
 
 pub(crate) mod graph;
 
@@ -64,6 +66,30 @@ impl<'tcx> OutlivesConstraintSet<'tcx> {
         &self,
     ) -> &IndexSlice<OutlivesConstraintIndex, OutlivesConstraint<'tcx>> {
         &self.outlives
+    }
+
+    /// Produces a new constraint set where placeholders outlive 'static.
+    pub(crate) fn placeholders_to_static(
+        &self,
+        universal_regions: &UniversalRegions<'tcx>,
+    ) -> Self {
+        let mut copy = self.clone();
+        for &c in
+            self.outlives
+                .iter()
+                .filter_map(|c| {
+                    if universal_regions.is_universal_region(c.sub) { Some(c) } else { None }
+                })
+                .dedup()
+        {
+            copy.push(OutlivesConstraint {
+                sup: c.sub,
+                sub: universal_regions.fr_static,
+                category: ConstraintCategory::Internal,
+                ..c
+            })
+        }
+        copy
     }
 }
 
