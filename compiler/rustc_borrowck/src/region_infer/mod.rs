@@ -344,7 +344,7 @@ impl<'tcx> RegionInferenceContext<'tcx> {
             .collect();
 
         let constraints = Frozen::freeze(
-            outlives_constraints.placeholders_to_static(&universal_regions, &definitions),
+            outlives_constraints.placeholders_to_static(universal_regions.fr_static, &definitions),
         );
         let constraint_graph = Frozen::freeze(constraints.graph(definitions.len()));
         let fr_static = universal_regions.fr_static;
@@ -535,44 +535,44 @@ impl<'tcx> RegionInferenceContext<'tcx> {
             self.definitions[variable].external_name = Some(external_name);
         }
 
-        for variable in self.definitions.indices() {
-            let scc = self.constraint_sccs.scc(variable);
+        // for variable in self.definitions.indices() {
+        //     let scc = self.constraint_sccs.scc(variable);
 
-            match self.definitions[variable].origin {
-                NllRegionVariableOrigin::FreeRegion => {
-                    // For each free, universally quantified region X:
+        //     match self.definitions[variable].origin {
+        //         NllRegionVariableOrigin::FreeRegion => {
+        //             // For each free, universally quantified region X:
+        //             println!("original code: {variable:?} free, must be live everywhere");
+        //             // Add all nodes in the CFG to liveness constraints
+        //             self.liveness_constraints.add_all_points(variable);
+        //             self.scc_values.add_all_points(scc);
 
-                    // Add all nodes in the CFG to liveness constraints
-                    self.liveness_constraints.add_all_points(variable);
-                    self.scc_values.add_all_points(scc);
+        //             // Add `end(X)` into the set for X.
+        //             self.scc_values.add_element(scc, variable);
+        //         }
 
-                    // Add `end(X)` into the set for X.
-                    self.scc_values.add_element(scc, variable);
-                }
+        //         NllRegionVariableOrigin::Placeholder(placeholder) => {
+        //             // Each placeholder region is only visible from
+        //             // its universe `ui` and its extensions. So we
+        //             // can't just add it into `scc` unless the
+        //             // universe of the scc can name this region.
+        //             let scc_universe = self.scc_universes[scc];
+        //             if scc_universe.can_name(placeholder.universe) {
+        //                 self.scc_values.add_element(scc, placeholder);
+        //             } else {
+        //                 debug!(
+        //                     "init_free_and_bound_regions: placeholder {:?} is \
+        //                      not compatible with universe {:?} of its SCC {:?}",
+        //                     placeholder, scc_universe, scc,
+        //                 );
+        //                 self.add_incompatible_universe(scc);
+        //             }
+        //         }
 
-                NllRegionVariableOrigin::Placeholder(placeholder) => {
-                    // Each placeholder region is only visible from
-                    // its universe `ui` and its extensions. So we
-                    // can't just add it into `scc` unless the
-                    // universe of the scc can name this region.
-                    let scc_universe = self.scc_universes[scc];
-                    if scc_universe.can_name(placeholder.universe) {
-                        self.scc_values.add_element(scc, placeholder);
-                    } else {
-                        debug!(
-                            "init_free_and_bound_regions: placeholder {:?} is \
-                             not compatible with universe {:?} of its SCC {:?}",
-                            placeholder, scc_universe, scc,
-                        );
-                        self.add_incompatible_universe(scc);
-                    }
-                }
-
-                NllRegionVariableOrigin::Existential { .. } => {
-                    // For existential, regions, nothing to do.
-                }
-            }
-        }
+        //         NllRegionVariableOrigin::Existential { .. } => {
+        //             // For existential, regions, nothing to do.
+        //         }
+        //     }
+        // }
     }
 
     /// Returns an iterator over all the region indices.
@@ -764,9 +764,10 @@ impl<'tcx> RegionInferenceContext<'tcx> {
                 // `A` can name everything that is in `B`, so just
                 // merge the bits.
                 self.scc_values.add_region(scc_a, scc_b);
-            } else {
-                self.add_incompatible_universe(scc_a);
             }
+            // else {
+            //     self.add_incompatible_universe(scc_a);
+            // }
         }
 
         // Now take member constraints into account.

@@ -200,6 +200,7 @@ impl LivenessValues {
     }
 
     /// Records `region` as being live at all the control-flow points.
+    #[allow(dead_code)]
     pub(crate) fn add_all_points(&mut self, region: RegionVid) {
         self.points.insert_all_into_row(region);
     }
@@ -329,12 +330,14 @@ impl<N: Idx> RegionValues<N> {
 
     /// Adds the given element to the value for the given region. Returns whether
     /// the element is newly added (i.e., was not already present).
+    #[allow(dead_code)]
     pub(crate) fn add_element(&mut self, r: N, elem: impl ToElementIndex) -> bool {
         debug!("add(r={:?}, elem={:?})", r, elem);
         elem.add_to_row(self, r)
     }
 
     /// Adds all the control-flow points to the values for `r`.
+    #[allow(dead_code)]
     pub(crate) fn add_all_points(&mut self, r: N) {
         self.points.insert_all_into_row(r);
     }
