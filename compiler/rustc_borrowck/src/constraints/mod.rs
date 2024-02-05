@@ -4,8 +4,9 @@
 use itertools::Itertools;
 use rustc_data_structures::graph::scc::Sccs;
 use rustc_index::{IndexSlice, IndexVec};
+use rustc_infer::infer::NllRegionVariableOrigin;
 use rustc_middle::mir::ConstraintCategory;
-use rustc_middle::ty::{RegionVid, VarianceDiagInfo};
+use rustc_middle::ty::{Placeholder, RegionVid, VarianceDiagInfo};
 use rustc_span::Span;
 use std::fmt;
 use std::ops::Index;
@@ -75,32 +76,41 @@ impl<'tcx> OutlivesConstraintSet<'tcx> {
         universal_regions: &UniversalRegions<'tcx>,
         definitions: &IndexVec<RegionVid, RegionDefinition<'tcx>>,
     ) -> Self {
-        let mut copy = self.clone();
-        for &c in self
-            .outlives
-            .iter()
-            .filter_map(|c| {
-                let universes_incompatible = {
-                    let sub_universe = definitions[c.sub].universe;
-                    let sup_universe = definitions[c.sup].universe;
-                    sub_universe > sup_universe
-                };
+        use NllRegionVariableOrigin as RVO;
 
-                if universes_incompatible && universal_regions.is_universal_region(c.sub) {
-                    Some(c)
-                } else {
-                    None
-                }
+        let mut copy = self.clone();
+        let universes_incompatible = |rvid: RegionVid, placeholder: Placeholder<_>| {
+            !definitions[rvid].universe.can_name(placeholder.universe) // THINK: is this sufficient given a non-scc universe?
+        };
+
+        let outlives_static = |rvid: RegionVid| OutlivesConstraint {
+            sup: rvid,
+            sub: universal_regions.fr_static, // All the following values are made up ex nihil
+            category: ConstraintCategory::Internal,
+            locations: Locations::All(rustc_span::DUMMY_SP),
+            span: rustc_span::DUMMY_SP,
+            variance_info: VarianceDiagInfo::None,
+            from_closure: false,
+        };
+
+        let should_be_static = definitions
+            .indices()
+            .filter_map(|rvid| match definitions[rvid].origin {
+                RVO::FreeRegion => Some(rvid), // Free regions must outlive the context: replace with 'static.
+                // Incompatible universes are only ok if they overlap in the runtime of the program, i.e. 'static.
+                RVO::Placeholder(p) if universes_incompatible(rvid, p) => Some(rvid),
+                // Nothing to do for the other cases:
+                RVO::Placeholder(_) => None, // The universes are compatible, so this is a regular subset membership
+                RVO::Existential { .. } => None, // Existentially quantified region variables are fine, WHY EXACTLY?
             })
-            .dedup()
-        {
-            copy.push(OutlivesConstraint {
-                sup: c.sub,
-                sub: universal_regions.fr_static,
-                category: ConstraintCategory::Internal,
-                ..c
-            })
+            .sorted()
+            .dedup();
+
+        for rvid in should_be_static {
+            println!("New code: having {:?} ({:?}) outlive 'static", rvid, definitions[rvid]);
+            copy.push(outlives_static(rvid));
         }
+
         copy
     }
 }
