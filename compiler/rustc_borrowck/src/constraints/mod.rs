@@ -79,9 +79,6 @@ impl<'tcx> OutlivesConstraintSet<'tcx> {
 
         let universe = |rvid: RegionVid| definitions[rvid].universe;
 
-        let universes_incompatible =
-            |left: RegionVid, right: RegionVid| !universe(left).can_name(universe(right));
-
         let outlives_static = |rvid: RegionVid| OutlivesConstraint {
             sup: rvid,
             sub: universal_regions.fr_static, // All the following values are made up ex nihil
@@ -105,7 +102,8 @@ impl<'tcx> OutlivesConstraintSet<'tcx> {
             while let Some(&outlived) = queue.pop() {
                 seen.insert(outlived);
 
-                if universes_incompatible(rvid, outlived) {
+                if universe(outlived) > universe(rvid) {
+                    println!("New code: having {:?} ({:?}) outlive 'static because it's incompatible with {:?}", rvid, definitions[rvid], outlived);
                     return Some(rvid);
                 } else {
                     queue.extend(must_outlive(outlived).filter(|r| !seen.contains(r)))
@@ -115,7 +113,6 @@ impl<'tcx> OutlivesConstraintSet<'tcx> {
         });
 
         for rvid in should_be_static {
-            println!("New code: having {:?} ({:?}) outlive 'static", rvid, definitions[rvid]);
             copy.push(outlives_static(rvid));
         }
 
