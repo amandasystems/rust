@@ -1,12 +1,11 @@
 #![deny(rustc::untranslatable_diagnostic)]
 #![deny(rustc::diagnostic_outside_of_impl)]
 
-use itertools::Itertools;
+use rustc_data_structures::fx::FxHashSet;
 use rustc_data_structures::graph::scc::Sccs;
 use rustc_index::{IndexSlice, IndexVec};
-use rustc_infer::infer::NllRegionVariableOrigin;
 use rustc_middle::mir::ConstraintCategory;
-use rustc_middle::ty::{Placeholder, RegionVid, VarianceDiagInfo};
+use rustc_middle::ty::{RegionVid, VarianceDiagInfo};
 use rustc_span::Span;
 use std::fmt;
 use std::ops::Index;
@@ -76,12 +75,12 @@ impl<'tcx> OutlivesConstraintSet<'tcx> {
         universal_regions: &UniversalRegions<'tcx>,
         definitions: &IndexVec<RegionVid, RegionDefinition<'tcx>>,
     ) -> Self {
-        use NllRegionVariableOrigin as RVO;
-
         let mut copy = self.clone();
-        let universes_incompatible = |rvid: RegionVid, placeholder: Placeholder<_>| {
-            !definitions[rvid].universe.can_name(placeholder.universe) // THINK: is this sufficient given a non-scc universe?
-        };
+
+        let universe = |rvid: RegionVid| definitions[rvid].universe;
+
+        let universes_incompatible =
+            |left: RegionVid, right: RegionVid| !universe(left).can_name(universe(right));
 
         let outlives_static = |rvid: RegionVid| OutlivesConstraint {
             sup: rvid,
@@ -93,18 +92,27 @@ impl<'tcx> OutlivesConstraintSet<'tcx> {
             from_closure: false,
         };
 
-        let should_be_static = definitions
-            .indices()
-            .filter_map(|rvid| match definitions[rvid].origin {
-                RVO::FreeRegion => Some(rvid), // Free regions must outlive the context: replace with 'static.
-                // Incompatible universes are only ok if they overlap in the runtime of the program, i.e. 'static.
-                RVO::Placeholder(p) if universes_incompatible(rvid, p) => Some(rvid),
-                // Nothing to do for the other cases:
-                RVO::Placeholder(_) => None, // The universes are compatible, so this is a regular subset membership
-                RVO::Existential { .. } => None, // Existentially quantified region variables are fine, WHY EXACTLY?
+        let must_outlive = |longer: RegionVid| {
+            self.outlives().iter().filter_map(move |OutlivesConstraint { sub, sup, .. }| {
+                (*sup == longer).then_some(sub)
             })
-            .sorted()
-            .dedup();
+        };
+
+        let should_be_static = definitions.indices().filter_map(|rvid| {
+            let mut queue: Vec<_> = must_outlive(rvid).collect();
+            let mut seen: FxHashSet<_> = FxHashSet::default();
+            seen.insert(rvid);
+            while let Some(&outlived) = queue.pop() {
+                seen.insert(outlived);
+
+                if universes_incompatible(rvid, outlived) {
+                    return Some(rvid);
+                } else {
+                    queue.extend(must_outlive(outlived).filter(|r| !seen.contains(r)))
+                }
+            }
+            None
+        });
 
         for rvid in should_be_static {
             println!("New code: having {:?} ({:?}) outlive 'static", rvid, definitions[rvid]);
