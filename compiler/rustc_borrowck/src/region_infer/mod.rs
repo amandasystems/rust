@@ -564,27 +564,22 @@ impl<'tcx> RegionInferenceContext<'tcx> {
                     self.scc_values.add_element(scc, variable);
                 }
 
-                NllRegionVariableOrigin::Placeholder(placeholder) => {
+                NllRegionVariableOrigin::Placeholder(_placeholder) => {
                     // Each placeholder region is only visible from
                     // its universe `ui` and its extensions. So we
                     // can't just add it into `scc` unless the
                     // universe of the scc can name this region.
-                    let scc_universe = self.scc_universes[scc];
-                    if scc_universe.can_name(placeholder.universe) {
-                        // debug!(
-                        //     "init_free_and_bound_regions: placeholder {:?} *is* \
-                        //      compatible with universe {:?} of its SCC {:?}",
-                        //     placeholder, scc_universe, scc,
-                        // );
-                        self.scc_values.add_element(scc, placeholder);
-                    } else {
-                        debug!(
-                            "init_free_and_bound_regions: placeholder {:?}  \
-                             incompatible with universe {:?} of its SCC {:?}",
-                            placeholder, scc_universe, scc,
-                        );
-                        self.add_incompatible_universe(scc);
-                    }
+                    // let scc_universe = self.scc_universes[scc];
+                    // if scc_universe.can_name(placeholder.universe) {
+                    //     self.scc_values.add_element(scc, placeholder);
+                    // } else {
+                    //     debug!(
+                    //         "init_free_and_bound_regions: placeholder {:?} is \
+                    //          not compatible with universe {:?} of its SCC {:?}",
+                    //         placeholder, scc_universe, scc,
+                    //     );
+                    //     self.add_incompatible_universe(scc);
+                    // }
                 }
 
                 NllRegionVariableOrigin::Existential { .. } => {
@@ -1644,8 +1639,10 @@ impl<'tcx> RegionInferenceContext<'tcx> {
     ) -> RegionRelationCheckResult {
         // If it is known that `fr: o`, carry on.
         if self.universal_region_relations.outlives(longer_fr, shorter_fr) {
+            debug!("checking that {:?}: {:?}: yes.", longer_fr, shorter_fr);
             RegionRelationCheckResult::Ok
         } else {
+            debug!("checking that {:?}: {:?}: no!", longer_fr, shorter_fr);
             // If we are not in a context where we can't propagate errors, or we
             // could not shrink `fr` to something smaller, then just report an
             // error.

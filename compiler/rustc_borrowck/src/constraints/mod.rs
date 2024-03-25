@@ -96,17 +96,21 @@ impl<'tcx> OutlivesConstraintSet<'tcx> {
         };
 
         let should_be_static = definitions.indices().filter_map(|rvid| {
-            let mut queue: Vec<_> = must_outlive(rvid).collect();
+            let mut queue: Vec<RegionVid> = must_outlive(rvid).map(|&r|r).collect();
             let mut seen: FxHashSet<_> = FxHashSet::default();
             seen.insert(rvid);
-            while let Some(&outlived) = queue.pop() {
-                seen.insert(outlived);
-
+            while let Some(outlived) = queue.pop() {
                 if universe(outlived) > universe(rvid) {
                     println!("New code: having {:?} ({:?}) outlive 'static because it's incompatible with {:?}", rvid, definitions[rvid], outlived);
                     return Some(rvid);
                 } else {
-                    queue.extend(must_outlive(outlived).filter(|r| !seen.contains(r)))
+                    for &r in must_outlive(outlived) {
+                        if seen.contains(&r) {
+                            continue;
+                        }
+                        seen.insert(r);
+                        queue.push(r);
+                    }
                 }
             }
             None
