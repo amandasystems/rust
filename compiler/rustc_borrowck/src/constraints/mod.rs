@@ -70,6 +70,7 @@ impl<'tcx> OutlivesConstraintSet<'tcx> {
     }
 
     /// Produces a new constraint set where placeholders outlive 'static.
+    #[instrument(level="debug", skip(self, universal_regions, definitions))]
     pub(crate) fn placeholders_to_static(
         &self,
         universal_regions: &UniversalRegions<'tcx>,
@@ -89,25 +90,26 @@ impl<'tcx> OutlivesConstraintSet<'tcx> {
             from_closure: false,
         };
 
-        let must_outlive = |longer: RegionVid| {
+        let outlived_regions = |longer: RegionVid| {
             self.outlives().iter().filter_map(move |OutlivesConstraint { sub, sup, .. }| {
                 (*sup == longer).then_some(sub)
             })
         };
 
         let should_be_static = definitions.indices().filter_map(|rvid| {
-            let mut queue: Vec<RegionVid> = must_outlive(rvid).map(|&r|r).collect();
-            let mut seen: FxHashSet<_> = FxHashSet::default();
+            let mut queue: Vec<RegionVid> = outlived_regions(rvid).map(|&r|r).collect();
+            let mut seen: FxHashSet<_> = queue.iter().map(|&r|r).collect();
             seen.insert(rvid);
             while let Some(outlived) = queue.pop() {
                 if universe(outlived) > universe(rvid) {
-                    println!("New code: having {:?} ({:?}) outlive 'static because it's incompatible with {:?}", rvid, definitions[rvid], outlived);
+                    debug!("Having {:?} ({:?}) outlive 'static because it's incompatible with {:?}", rvid, definitions[rvid], outlived);
                     return Some(rvid);
                 } else {
-                    for &r in must_outlive(outlived) {
+                    for &r in outlived_regions(outlived) {
                         if seen.contains(&r) {
                             continue;
                         }
+                        debug!("visiting: {rvid:?} --{outlived:?}---> {r:?}");
                         seen.insert(r);
                         queue.push(r);
                     }
