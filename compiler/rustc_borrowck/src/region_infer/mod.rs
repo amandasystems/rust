@@ -22,6 +22,7 @@ use rustc_middle::traits::ObligationCauseCode;
 use rustc_middle::ty::{self, RegionVid, Ty, TyCtxt, TypeFoldable};
 use rustc_mir_dataflow::points::DenseLocationMap;
 use rustc_span::Span;
+use tracing::instrument;
 
 use crate::constraints::graph::{self, NormalConstraintGraph, RegionGraph};
 use crate::dataflow::BorrowIndex;
@@ -899,6 +900,7 @@ impl<'tcx> RegionInferenceContext<'tcx> {
     /// Returns `true` if all the elements in the value of `scc_b` are nameable
     /// in `scc_a`. Used during constraint propagation, and only once
     /// the value of `scc_b` has been computed.
+    #[instrument(level = "debug", skip(self))]
     fn universe_compatible(&self, scc_b: ConstraintSccIndex, scc_a: ConstraintSccIndex) -> bool {
         let universe_a = self.scc_universes[scc_a];
 
@@ -912,7 +914,14 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         // Otherwise, we have to iterate over the universe elements in
         // B's value, and check whether all of them are nameable
         // from universe_a
-        self.scc_values.placeholders_contained_in(scc_b).all(|p| universe_a.can_name(p.universe))
+        self.scc_values.placeholders_contained_in(scc_b).all(|p| {
+            if universe_a.can_name(p.universe) {
+                true
+            } else {
+                debug!("{universe_a:?} cannot name {:?} through {p:?}", p.universe);
+                false
+            }
+        })
     }
 
     /// Extend `scc` so that it can outlive some placeholder region
