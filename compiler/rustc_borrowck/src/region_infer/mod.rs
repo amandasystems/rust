@@ -399,7 +399,7 @@ impl<'tcx> RegionInferenceContext<'tcx> {
     /// takes on must be a value that each of the regions within the
     /// SCC could have as well. This implies that the SCC must have
     /// the minimum, or narrowest, universe.
-    #[instrument(level="debug", skip(constraint_sccs, definitions))]
+    #[instrument(level = "debug", skip(constraint_sccs, definitions))]
     fn compute_scc_universes(
         constraint_sccs: &Sccs<RegionVid, ConstraintSccIndex>,
         definitions: &IndexSlice<RegionVid, RegionDefinition<'tcx>>,
@@ -760,7 +760,6 @@ impl<'tcx> RegionInferenceContext<'tcx> {
             debug!(?scc_b);
             debug!("scc_b is: {:?}", self.scc_representatives[scc_b]);
 
-
             // ...and add elements from `B` into `A`. One complication
             // arises because of universes: If `B` contains something
             // that `A` cannot name, then `A` can only contain `B` if
@@ -909,8 +908,10 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         // scc_a's declared universe (typically, both are ROOT), then
         // it cannot contain any problematic universe elements.
         if universe_a.can_name(self.scc_universes[scc_b]) {
-            debug!("{universe_a:?} of {scc_a:?} can name declared universe {declared_universe:?} of {scc_b:?}",
-        declared_universe = self.scc_universes[scc_b]);
+            debug!(
+                "{universe_a:?} of {scc_a:?} can name declared universe {declared_universe:?} of {scc_b:?}",
+                declared_universe = self.scc_universes[scc_b]
+            );
             return true;
         }
 
