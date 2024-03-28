@@ -100,11 +100,14 @@ impl<'tcx> OutlivesConstraintSet<'tcx> {
             let mut queue: Vec<RegionVid> = outlived_regions(rvid).map(|&r| r).collect();
             let mut seen: FxHashSet<_> = queue.iter().map(|&r| r).collect();
             seen.insert(rvid);
+            debug!(?rvid);
+            debug!("rvid definition: {:?}", definitions[rvid]);
             while let Some(outlived) = queue.pop() {
                 if universe(outlived) > universe(rvid) {
                     debug!(
-                        "Having {:?} ({:?}) outlive 'static because it's incompatible with {:?}",
-                        rvid, definitions[rvid], outlived
+                        "{rvid:?}: {outlived:?} => {rvid:?}: 'static, universe leak ({:?} > {:?})",
+                        universe(outlived),
+                        universe(rvid)
                     );
                     return Some(rvid);
                 } else {
