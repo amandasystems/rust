@@ -911,6 +911,8 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         // scc_a's declared universe (typically, both are ROOT), then
         // it cannot contain any problematic universe elements.
         if universe_a.can_name(self.scc_universes[scc_b]) {
+            debug!("{universe_a:?} of {scc_a:?} can name declared universe {declared_universe:?} of {scc_b:?}",
+        declared_universe = self.scc_universes[scc_b]);
             return true;
         }
 
@@ -918,12 +920,9 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         // B's value, and check whether all of them are nameable
         // from universe_a
         self.scc_values.placeholders_contained_in(scc_b).all(|p| {
-            if universe_a.can_name(p.universe) {
-                true
-            } else {
-                debug!("{universe_a:?} cannot name {:?} through {p:?}", p.universe);
-                false
-            }
+            let universe_ok = universe_a.can_name(p.universe);
+            debug!("{universe_a:?} can name {:?} through {p:?}? {universe_ok:?}", p.universe);
+            universe_ok
         })
     }
 
