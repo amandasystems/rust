@@ -401,14 +401,13 @@ impl<'tcx> RegionInferenceContext<'tcx> {
     /// takes on must be a value that each of the regions within the
     /// SCC could have as well. This implies that the SCC must have
     /// the minimum, or narrowest, universe.
+    #[instrument(level="debug", skip(constraint_sccs, definitions))]
     fn compute_scc_universes(
         constraint_sccs: &Sccs<RegionVid, ConstraintSccIndex>,
         definitions: &IndexSlice<RegionVid, RegionDefinition<'tcx>>,
     ) -> IndexVec<ConstraintSccIndex, ty::UniverseIndex> {
         let num_sccs = constraint_sccs.num_sccs();
         let mut scc_universes = IndexVec::from_elem_n(ty::UniverseIndex::MAX, num_sccs);
-
-        debug!("compute_scc_universes()");
 
         // For each region R in universe U, ensure that the universe for the SCC
         // that contains R is "no bigger" than U. This effectively sets the universe
@@ -418,15 +417,14 @@ impl<'tcx> RegionInferenceContext<'tcx> {
             let scc_universe = &mut scc_universes[scc];
             let scc_min = std::cmp::min(region_definition.universe, *scc_universe);
             if scc_min != *scc_universe {
-                *scc_universe = scc_min;
                 debug!(
-                    "compute_scc_universes: lowered universe of {scc:?} to {scc_min:?} \
+                    "compute_scc_universes: lowered universe of {scc:?} from {previous_universe:?} to {scc_min:?} \
                     because it contains {region_vid:?} in {region_universe:?}",
-                    scc = scc,
-                    scc_min = scc_min,
-                    region_vid = region_vid,
                     region_universe = region_definition.universe,
+                    previous_universe = scc_universe,
                 );
+
+                *scc_universe = scc_min;
             }
         }
 
