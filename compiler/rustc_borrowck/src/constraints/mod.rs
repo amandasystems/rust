@@ -4,6 +4,7 @@
 use rustc_data_structures::fx::FxHashSet;
 use rustc_data_structures::graph::scc::Sccs;
 use rustc_index::{IndexSlice, IndexVec};
+use rustc_infer::infer::NllRegionVariableOrigin;
 use rustc_middle::mir::ConstraintCategory;
 use rustc_middle::ty::{RegionVid, VarianceDiagInfo};
 use rustc_span::Span;
@@ -80,6 +81,10 @@ impl<'tcx> OutlivesConstraintSet<'tcx> {
 
         let universe = |rvid: RegionVid| definitions[rvid].universe;
 
+        let is_placeholder = |rvid: RegionVid| {
+            matches!(definitions[rvid].origin, NllRegionVariableOrigin::Placeholder(_))
+        };
+
         let outlives_static = |rvid: RegionVid| OutlivesConstraint {
             sup: rvid,
             sub: universal_regions.fr_static, // All the following values are made up ex nihil
@@ -103,7 +108,7 @@ impl<'tcx> OutlivesConstraintSet<'tcx> {
             debug!(?rvid);
             debug!("rvid definition: {:?}", definitions[rvid]);
             while let Some(outlived) = queue.pop() {
-                if universe(outlived) > universe(rvid) {
+                if is_placeholder(outlived) && universe(outlived) > universe(rvid) {
                     debug!(
                         "{rvid:?}: {outlived:?} => {rvid:?}: 'static, universe leak ({:?} > {:?})",
                         universe(outlived),
