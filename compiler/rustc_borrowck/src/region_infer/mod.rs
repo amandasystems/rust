@@ -562,6 +562,11 @@ impl<'tcx> RegionInferenceContext<'tcx> {
                     // universe of the scc can name this region.
                     let scc_universe = self.scc_universes[scc];
                     if scc_universe.can_name(placeholder.universe) {
+                        debug!(
+                            "init_free_and_bound_regions: placeholder {:?} *is* \
+                             compatible with universe {:?} of its SCC {:?}",
+                            placeholder, scc_universe, scc,
+                        );
                         self.scc_values.add_element(scc, placeholder);
                     } else {
                         debug!(
