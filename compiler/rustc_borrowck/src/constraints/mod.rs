@@ -88,7 +88,7 @@ impl<'tcx> OutlivesConstraintSet<'tcx> {
         let outlives_static = |rvid: RegionVid| OutlivesConstraint {
             sup: rvid,
             sub: universal_regions.fr_static, // All the following values are made up ex nihil
-            category: ConstraintCategory::Internal,
+            category: ConstraintCategory::BoringNoLocation,
             locations: Locations::All(rustc_span::DUMMY_SP),
             span: rustc_span::DUMMY_SP,
             variance_info: VarianceDiagInfo::None,

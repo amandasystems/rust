@@ -769,19 +769,7 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         // Walk each SCC `B` such that `A: B`...
         for &scc_b in constraint_sccs.successors(scc_a) {
             debug!(?scc_b);
-            debug!("scc_b is: {:?}", self.scc_representatives[scc_b]);
-
-            // ...and add elements from `B` into `A`. One complication
-            // arises because of universes: If `B` contains something
-            // that `A` cannot name, then `A` can only contain `B` if
-            // it outlives static.
-            if self.universe_compatible(scc_b, scc_a) {
-                // `A` can name everything that is in `B`, so just
-                // merge the bits.
-                self.scc_values.add_region(scc_a, scc_b);
-            } else {
-                self.add_incompatible_universe(scc_a);
-            }
+            self.scc_values.add_region(scc_a, scc_b);
         }
 
         // Now take member constraints into account.
@@ -931,21 +919,6 @@ impl<'tcx> RegionInferenceContext<'tcx> {
             }
             universe_ok
         })
-    }
-
-    /// Extend `scc` so that it can outlive some placeholder region
-    /// from a universe it can't name; at present, the only way for
-    /// this to be true is if `scc` outlives `'static`. This is
-    /// actually stricter than necessary: ideally, we'd support bounds
-    /// like `for<'a: 'b>` that might then allow us to approximate
-    /// `'a` with `'b` and not `'static`. But it will have to do for
-    /// now.
-    fn add_incompatible_universe(&mut self, scc: ConstraintSccIndex) {
-        debug!("add_incompatible_universe(scc={:?})", scc);
-
-        let fr_static = self.universal_regions.fr_static;
-        self.scc_values.add_all_points(scc);
-        self.scc_values.add_element(scc, fr_static);
     }
 
     /// Once regions have been propagated, this method is used to see
