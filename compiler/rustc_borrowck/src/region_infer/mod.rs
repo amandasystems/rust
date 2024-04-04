@@ -763,11 +763,9 @@ impl<'tcx> RegionInferenceContext<'tcx> {
     /// (which is assured by iterating over SCCs in dependency order).
     #[instrument(skip(self), level = "debug")]
     fn compute_value_for_scc(&mut self, scc_a: ConstraintSccIndex) {
-        let constraint_sccs = self.constraint_sccs.clone();
-        debug!("scc_a is: {:?}", self.scc_representatives[scc_a]);
 
         // Walk each SCC `B` such that `A: B`...
-        for &scc_b in constraint_sccs.successors(scc_a) {
+        for &scc_b in self.constraint_sccs.successors(scc_a) {
             debug!(?scc_b);
             self.scc_values.add_region(scc_a, scc_b);
         }
