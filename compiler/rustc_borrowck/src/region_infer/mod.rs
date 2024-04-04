@@ -543,7 +543,7 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         // This iterator has unstable order but we collect it all into an IndexVec
         for (external_name, variable) in self.universal_regions.named_universal_regions() {
             debug!(
-                "init_universal_regions: region {:?} has external name {:?}",
+                "init_free_and_bound_regions: region {:?} has external name {:?}",
                 variable, external_name
             );
             self.definitions[variable].external_name = Some(external_name);
@@ -564,22 +564,8 @@ impl<'tcx> RegionInferenceContext<'tcx> {
                     self.scc_values.add_element(scc, variable);
                 }
 
-                NllRegionVariableOrigin::Placeholder(_placeholder) => {
-                    // Each placeholder region is only visible from
-                    // its universe `ui` and its extensions. So we
-                    // can't just add it into `scc` unless the
-                    // universe of the scc can name this region.
-                    // let scc_universe = self.scc_universes[scc];
-                    // if scc_universe.can_name(placeholder.universe) {
-                    //     self.scc_values.add_element(scc, placeholder);
-                    // } else {
-                    //     debug!(
-                    //         "init_free_and_bound_regions: placeholder {:?} is \
-                    //          not compatible with universe {:?} of its SCC {:?}",
-                    //         placeholder, scc_universe, scc,
-                    //     );
-                    //     self.add_incompatible_universe(scc);
-                    // }
+                NllRegionVariableOrigin::Placeholder(placeholder) => {
+                    self.scc_values.add_element(scc, placeholder);
                 }
 
                 NllRegionVariableOrigin::Existential { .. } => {
@@ -763,7 +749,6 @@ impl<'tcx> RegionInferenceContext<'tcx> {
     /// (which is assured by iterating over SCCs in dependency order).
     #[instrument(skip(self), level = "debug")]
     fn compute_value_for_scc(&mut self, scc_a: ConstraintSccIndex) {
-
         // Walk each SCC `B` such that `A: B`...
         for &scc_b in self.constraint_sccs.successors(scc_a) {
             debug!(?scc_b);
