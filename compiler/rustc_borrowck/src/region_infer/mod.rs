@@ -391,6 +391,13 @@ impl<'tcx> RegionInferenceContext<'tcx> {
 
         result.init_free_and_bound_regions();
 
+        debug!("Variables and their origins");
+        for variable in result.definitions.indices() {
+            let origin = result.definitions[variable].origin;
+            let universe = result.definitions[variable].universe;
+            debug!(?variable, ?origin, ?universe);
+        }
+
         result
     }
 
@@ -562,16 +569,16 @@ impl<'tcx> RegionInferenceContext<'tcx> {
                     // universe of the scc can name this region.
                     let scc_universe = self.scc_universes[scc];
                     if scc_universe.can_name(placeholder.universe) {
-                        debug!(
-                            "init_free_and_bound_regions: placeholder {:?} *is* \
-                             compatible with universe {:?} of its SCC {:?}",
-                            placeholder, scc_universe, scc,
-                        );
+                        // debug!(
+                        //     "init_free_and_bound_regions: placeholder {:?} *is* \
+                        //      compatible with universe {:?} of its SCC {:?}",
+                        //     placeholder, scc_universe, scc,
+                        // );
                         self.scc_values.add_element(scc, placeholder);
                     } else {
                         debug!(
-                            "init_free_and_bound_regions: placeholder {:?} is \
-                             not compatible with universe {:?} of its SCC {:?}",
+                            "init_free_and_bound_regions: placeholder {:?}  \
+                             incompatible with universe {:?} of its SCC {:?}",
                             placeholder, scc_universe, scc,
                         );
                         self.add_incompatible_universe(scc);
@@ -907,7 +914,6 @@ impl<'tcx> RegionInferenceContext<'tcx> {
     /// Returns `true` if all the elements in the value of `scc_b` are nameable
     /// in `scc_a`. Used during constraint propagation, and only once
     /// the value of `scc_b` has been computed.
-    #[instrument(level = "debug", skip(self))]
     fn universe_compatible(&self, scc_b: ConstraintSccIndex, scc_a: ConstraintSccIndex) -> bool {
         let universe_a = self.scc_universes[scc_a];
 
@@ -915,10 +921,6 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         // scc_a's declared universe (typically, both are ROOT), then
         // it cannot contain any problematic universe elements.
         if universe_a.can_name(self.scc_universes[scc_b]) {
-            debug!(
-                "{universe_a:?} of {scc_a:?} can name declared universe {declared_universe:?} of {scc_b:?}",
-                declared_universe = self.scc_universes[scc_b]
-            );
             return true;
         }
 
@@ -927,7 +929,9 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         // from universe_a
         self.scc_values.placeholders_contained_in(scc_b).all(|p| {
             let universe_ok = universe_a.can_name(p.universe);
-            debug!("{universe_a:?} can name {:?} through {p:?}? {universe_ok:?}", p.universe);
+            if !universe_ok {
+                debug!("{universe_a:?} CANNOT NAME {:?} through {p:?}!", p.universe);
+            }
             universe_ok
         })
     }
