@@ -72,7 +72,7 @@ pub struct RegionInferenceContext<'tcx> {
     /// The SCC computed from `constraints` and the constraint
     /// graph. We have an edge from SCC A to SCC B if `A: B`. Used to
     /// compute the values of each region.
-    constraint_sccs: Rc<Sccs<RegionVid, ConstraintSccIndex>>,
+    constraint_sccs: Sccs<RegionVid, ConstraintSccIndex>,
 
     /// Reverse of the SCC constraint graph --  i.e., an edge `A -> B` exists if
     /// `B: A`. This is used to compute the universal regions that are required
@@ -252,7 +252,7 @@ pub enum ExtraConstraintInfo {
 #[instrument(skip(infcx, sccs), level = "debug")]
 fn sccs_info<'cx, 'tcx>(
     infcx: &'cx BorrowckInferCtxt<'cx, 'tcx>,
-    sccs: Rc<Sccs<RegionVid, ConstraintSccIndex>>,
+    sccs: &Sccs<RegionVid, ConstraintSccIndex>,
 ) {
     use crate::renumber::RegionCtxt;
 
@@ -351,10 +351,10 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         );
         let constraint_graph = Frozen::freeze(constraints.graph(definitions.len()));
         let fr_static = universal_regions.fr_static;
-        let constraint_sccs = Rc::new(constraints.compute_sccs(&constraint_graph, fr_static));
+        let constraint_sccs = constraints.compute_sccs(&constraint_graph, fr_static);
 
         if cfg!(debug_assertions) {
-            sccs_info(_infcx, constraint_sccs.clone());
+            sccs_info(_infcx, &constraint_sccs);
         }
 
         let mut scc_values =
@@ -543,7 +543,7 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         // This iterator has unstable order but we collect it all into an IndexVec
         for (external_name, variable) in self.universal_regions.named_universal_regions() {
             debug!(
-                "init_free_and_bound_regions: region {:?} has external name {:?}",
+                "`init_free_and_bound_regions`: region {:?} has external name {:?}",
                 variable, external_name
             );
             self.definitions[variable].external_name = Some(external_name);
@@ -733,8 +733,7 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         // SCC. For each SCC, we visit its successors and compute
         // their values, then we union all those values to get our
         // own.
-        let constraint_sccs = self.constraint_sccs.clone();
-        for scc in constraint_sccs.all_sccs() {
+        for scc in self.constraint_sccs.all_sccs() {
             self.compute_value_for_scc(scc);
         }
 
@@ -2223,7 +2222,7 @@ impl<'tcx> RegionInferenceContext<'tcx> {
 
     /// Access to the SCC constraint graph.
     pub(crate) fn constraint_sccs(&self) -> &Sccs<RegionVid, ConstraintSccIndex> {
-        self.constraint_sccs.as_ref()
+        &self.constraint_sccs
     }
 
     /// Access to the region graph, built from the outlives constraints.
