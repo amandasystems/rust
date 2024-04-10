@@ -807,12 +807,6 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         if self.scc_universes[scc] != ty::UniverseIndex::ROOT {
             return;
         }
-        debug_assert!(
-            self.scc_values.placeholders_contained_in(scc).next().is_none(),
-            "scc {:?} in a member constraint has placeholder value: {:?}",
-            scc,
-            self.scc_values.region_value_str(scc),
-        );
 
         // The existing value for `scc` is a lower-bound. This will
         // consist of some set `{P} + {LB}` of points `{P}` and
@@ -1534,7 +1528,6 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         // Because this free region must be in the ROOT universe, we
         // know it cannot contain any bound universes.
         assert!(self.scc_universes[longer_fr_scc] == ty::UniverseIndex::ROOT);
-        debug_assert!(self.scc_values.placeholders_contained_in(longer_fr_scc).next().is_none());
 
         // Only check all of the relations for the main representative of each
         // SCC, otherwise just check that we outlive said representative. This

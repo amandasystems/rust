@@ -120,7 +120,6 @@ impl<'tcx> OutlivesConstraintSet<'tcx> {
                         if seen.contains(&r) {
                             continue;
                         }
-                        debug!("visiting: {rvid:?} --{outlived:?}---> {r:?}");
                         seen.insert(r);
                         queue.push(r);
                     }
