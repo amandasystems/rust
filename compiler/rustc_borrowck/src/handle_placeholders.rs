@@ -69,7 +69,7 @@ impl scc::Annotations<RegionVid> for SccAnnotations<'_, '_, RegionTracker> {
 }
 
 #[derive(Copy, Debug, Clone, PartialEq, Eq)]
-enum PlaceholderReachability {
+pub(crate) enum PlaceholderReachability {
     /// This SCC reaches no placeholders.
     NoPlaceholders,
     /// This SCC reaches at least one placeholder.
@@ -217,6 +217,10 @@ impl RegionTracker {
             }
             PlaceholderReachability::Placeholders { min_placeholder, .. } => Some(min_placeholder),
         }
+    }
+
+    pub(crate) fn reachable_placeholders(&self) -> PlaceholderReachability {
+        self.reachable_placeholders
     }
 }
 /// Pick the smallest universe index out of two, preferring
