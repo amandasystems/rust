@@ -867,10 +867,9 @@ impl<'tcx> RegionInferenceContext<'tcx> {
 
     /// Evaluate whether `sup_region == sub_region`.
     ///
-    /// Panics if called before `solve()` executes,
     // This is `pub` because it's used by unstable external borrowck data users, see `consumers.rs`.
     pub fn eval_equal(&self, r1: RegionVid, r2: RegionVid) -> bool {
-        self.eval_outlives(r1, r2) && self.eval_outlives(r2, r1)
+        self.constraint_sccs.scc(r1) == self.constraint_sccs.scc(r2)
     }
 
     /// Evaluate whether `sup_region: sub_region`.
