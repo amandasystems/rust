@@ -17,6 +17,7 @@ use rustc_middle::mir::{self, BasicBlock, Body, Local, Location, Place, Statemen
 use rustc_middle::ty::TyCtxt;
 use rustc_mir_dataflow::points::DenseLocationMap;
 use smallvec::{SmallVec, smallvec};
+use tracing::{debug, instrument};
 
 use super::ConstraintDirection;
 use crate::{
@@ -288,6 +289,7 @@ impl<'a, 'b, 'tcx> BorrowContext<'a, 'b, 'tcx> {
         })
     }
 
+    #[instrument(skip(self), ret)]
     fn has_live_region_at(&self, location: Location) -> bool {
         self.pcx.regioncx.region_contains(self.borrow.region, location)
     }
@@ -338,6 +340,7 @@ impl<'a, 'tcx> Polonius<'a, 'tcx> {
     }
 
     /// Check if a loan is is active at a point in the CFG.
+    #[instrument(skip(self, borrow_idx), ret)]
     pub(crate) fn loan_is_active_at(
         &mut self,
         borrow_idx: BorrowIndex,
@@ -411,6 +414,7 @@ impl<'a, 'tcx> Polonius<'a, 'tcx> {
 
 /// Returns `true` if the loan is killed at `location`. Note that the kill takes effect at the next
 /// statement.
+#[instrument(skip(bcx), ret)]
 fn is_killed(
     bcx: BorrowContext<'_, '_, '_>,
     kills_cache: &mut KillsCache,
@@ -446,37 +450,41 @@ fn is_killed(
 }
 
 /// Calculate when/if a loan goes out of scope for a set of statements in a block.
+#[instrument(skip(bcx, kills_cache), ret)]
 fn is_killed_at_block(
     bcx: BorrowContext<'_, '_, '_>,
     kills_cache: &mut KillsCache,
     block: PoloniusBlock,
 ) -> bool {
-    let res = kills_cache.get_or_insert_with(block, || {
-        let block_data = &bcx.pcx.body[block.basic_block(bcx)];
-        for statement_index in block.first_index(bcx)..=block.last_index(bcx) {
-            let location = Location { statement_index, block: block.basic_block(bcx) };
-
-            let is_kill = !bcx.has_live_region_at(location)
-                || if let Some(stmt) = block_data.statements.get(statement_index) {
-                    is_killed_at_stmt(bcx, stmt)
-                } else {
-                    is_killed_at_terminator(bcx, &block_data.terminator())
-                };
-
-            if is_kill {
-                return Killed { statement_index };
-            }
-        }
-
-        NotKilled
-    });
+    let res = kills_cache.get_or_insert_with(block, || compute_killed(bcx, block));
 
     matches!(res, Killed { .. })
 }
 
+#[instrument(skip(bcx), ret)]
+fn compute_killed(bcx: BorrowContext<'_, '_, '_>, block: PoloniusBlock) -> KillAtBlock {
+    let block_data = &bcx.pcx.body[block.basic_block(bcx)];
+    for statement_index in block.first_index(bcx)..=block.last_index(bcx) {
+        let location = Location { statement_index, block: block.basic_block(bcx) };
+
+        let is_kill = !bcx.has_live_region_at(location)
+            || if let Some(stmt) = block_data.statements.get(statement_index) {
+                is_killed_at_stmt(bcx, stmt)
+            } else {
+                is_killed_at_terminator(bcx, &block_data.terminator())
+            };
+
+        if is_kill {
+            return Killed { statement_index };
+        }
+    }
+
+    NotKilled
+}
+
 /// Given that the borrow was in scope on entry to this statement, check if it goes out of scope
 /// till the next location.
-#[inline]
+#[instrument(skip(bcx), ret)]
 fn is_killed_at_stmt<'tcx>(bcx: BorrowContext<'_, '_, 'tcx>, stmt: &Statement<'tcx>) -> bool {
     match &stmt.kind {
         mir::StatementKind::Assign(box (lhs, _rhs)) => kill_on_place(bcx, *lhs),
@@ -489,12 +497,12 @@ fn is_killed_at_stmt<'tcx>(bcx: BorrowContext<'_, '_, 'tcx>, stmt: &Statement<'t
 
 /// Given that the borrow was in scope on entry to this terminator, check if it goes out of scope
 /// till the succeeding blocks.
-#[inline]
+#[instrument(skip(bcx), ret)]
 fn is_killed_at_terminator<'tcx>(
     bcx: BorrowContext<'_, '_, 'tcx>,
     terminator: &Terminator<'tcx>,
 ) -> bool {
-    match &terminator.kind {
+    let killed_by_terminator = match &terminator.kind {
         // A `Call` terminator's return value can be a local which has borrows, so we need to record
         // those as killed as well.
         mir::TerminatorKind::Call { destination, .. } => kill_on_place(bcx, *destination),
@@ -508,7 +516,20 @@ fn is_killed_at_terminator<'tcx>(
             }
         }),
         _ => false,
-    }
+    };
+    let dead_in_every_successor = {
+        let mut res = true;
+        for successor in terminator.successors() {
+            let next_location = Location { block: successor, statement_index: 0 };
+            if bcx.has_live_region_at(next_location) {
+                res = false;
+            }
+        }
+        res
+    };
+
+    debug!(?killed_by_terminator, ?dead_in_every_successor);
+    killed_by_terminator || dead_in_every_successor
 }
 
 #[inline]
@@ -527,7 +548,7 @@ fn kill_on_place<'tcx>(bcx: BorrowContext<'_, '_, 'tcx>, place: Place<'tcx>) -> 
         }
 }
 
-#[inline(never)] // FIXME: Remove this.
+#[instrument(skip(bcx, kills_cache), ret)]
 fn live_paths(
     bcx: BorrowContext<'_, '_, '_>,
     kills_cache: &mut KillsCache,
@@ -546,6 +567,7 @@ fn live_paths(
     }
 
     if destination_block.is_introduction_block(bcx) {
+        debug!("Destination is the introduction block!");
         // We are finished.
         return Some(bcx.new_polonius_block_set());
     }
@@ -610,6 +632,10 @@ fn live_paths(
         }
     }
 
+    if let Some(paths) = valid_paths.as_ref() && paths.is_empty() {
+        debug!("Found no valid paths. This probably shouldn't happen");
+        return None;
+    }
     valid_paths
 }
 

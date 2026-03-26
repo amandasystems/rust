@@ -1351,7 +1351,7 @@ impl<'a, 'tcx> MirBorrowckCtxt<'a, '_, 'tcx> {
         location: Location,
     ) -> bool {
         if let Some(ref mut scopes_computer) = self.polonius {
-            scopes_computer.loan_maybe_active_at(borrow_idx, borrow, location)
+            scopes_computer.loan_maybe_active_at(borrow_idx, borrow, location) || true
         } else {
             true
         }
