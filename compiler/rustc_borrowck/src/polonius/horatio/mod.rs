@@ -13,7 +13,7 @@ use location_sensitive::LocationSensitiveAnalysis;
 use polonius_block::PoloniusBlock;
 use rustc_index::IndexVec;
 use rustc_index::bit_set::DenseBitSet;
-use rustc_middle::mir::{self, BasicBlock, Body, Local, Location, Place, Statement, Terminator};
+use rustc_middle::mir::{self, BasicBlock, Body, Local, Location, Place, Statement};
 use rustc_middle::ty::TyCtxt;
 use rustc_mir_dataflow::points::DenseLocationMap;
 use smallvec::{SmallVec, smallvec};
@@ -437,7 +437,7 @@ fn is_killed(
         {
             is_killed_at_stmt(bcx, stmt)
         } else {
-            is_killed_at_terminator(bcx, &bcx.pcx.body[location.block].terminator())
+            is_killed_at_terminator(bcx, location.block)
         };
 
     // If we had a kill at this location, we should add it to the cache.
@@ -463,20 +463,27 @@ fn is_killed_at_block(
 
 #[instrument(skip(bcx), ret)]
 fn compute_killed(bcx: BorrowContext<'_, '_, '_>, block: PoloniusBlock) -> KillAtBlock {
-    let block_data = &bcx.pcx.body[block.basic_block(bcx)];
+    let basic_block = block.basic_block(bcx);
+    let block_data = &bcx.pcx.body[basic_block];
     for statement_index in block.first_index(bcx)..=block.last_index(bcx) {
-        let location = Location { statement_index, block: block.basic_block(bcx) };
+        let location = Location { statement_index, block: basic_block };
 
-        let is_kill = !bcx.has_live_region_at(location)
-            || if let Some(stmt) = block_data.statements.get(statement_index) {
-                is_killed_at_stmt(bcx, stmt)
-            } else {
-                is_killed_at_terminator(bcx, &block_data.terminator())
-            };
-
-        if is_kill {
+        if !bcx.has_live_region_at(location) {
+            debug!("Killed by no live regions at {location:?}");
             return Killed { statement_index };
-        }
+        };
+
+        if let Some(stmt) = block_data.statements.get(statement_index)
+            && is_killed_at_stmt(bcx, stmt)
+        {
+            debug!("Killed by statement `{stmt:?}` at {location:?}");
+            return Killed { statement_index };
+        };
+    }
+
+    if is_killed_at_terminator(bcx, basic_block) {
+        debug!("Killed by terminator {:?}", block_data.terminator());
+        return Killed { statement_index: block.last_index(bcx) };
     }
 
     NotKilled
@@ -484,7 +491,7 @@ fn compute_killed(bcx: BorrowContext<'_, '_, '_>, block: PoloniusBlock) -> KillA
 
 /// Given that the borrow was in scope on entry to this statement, check if it goes out of scope
 /// till the next location.
-#[instrument(skip(bcx), ret)]
+//#[instrument(skip(bcx), ret)]
 fn is_killed_at_stmt<'tcx>(bcx: BorrowContext<'_, '_, 'tcx>, stmt: &Statement<'tcx>) -> bool {
     match &stmt.kind {
         mir::StatementKind::Assign(box (lhs, _rhs)) => kill_on_place(bcx, *lhs),
@@ -497,11 +504,12 @@ fn is_killed_at_stmt<'tcx>(bcx: BorrowContext<'_, '_, 'tcx>, stmt: &Statement<'t
 
 /// Given that the borrow was in scope on entry to this terminator, check if it goes out of scope
 /// till the succeeding blocks.
-#[instrument(skip(bcx), ret)]
+//#[instrument(skip(bcx), ret)]
 fn is_killed_at_terminator<'tcx>(
     bcx: BorrowContext<'_, '_, 'tcx>,
-    terminator: &Terminator<'tcx>,
+    basic_block: BasicBlock,
 ) -> bool {
+    let terminator = &bcx.pcx.body[basic_block].terminator();
     let killed_by_terminator = match &terminator.kind {
         // A `Call` terminator's return value can be a local which has borrows, so we need to record
         // those as killed as well.
@@ -556,8 +564,22 @@ fn live_paths(
 ) -> Option<DenseBitSet<PoloniusBlock>> {
     // `destination_block` is the `PoloniusBlock` for `destination`.
     let destination_block = PoloniusBlock::from_location(bcx, destination);
+    debug!(?destination_block);
 
-    // We begin by checking the relevant statements in `destination_block`.
+    if !bcx.has_live_region_at(destination) {
+        // FIXME: this really should be detected by `is_killed()`!? Something is off.
+        debug!("No live location at {destination:?}; there can be no live paths!");
+        return None;
+    }
+
+    if destination_block.is_introduction_block(bcx) {
+        debug!("Destination is the introduction block!");
+        // We are finished.
+        return Some(bcx.new_polonius_block_set());
+    }
+
+    // We begin by checking the relevant statements in `destination_block` to see if
+    // the loan is killed. In that case, there is no path there.
     // FIXME: Is this the most efficient solution?
     for statement_index in destination_block.first_index(bcx)..destination.statement_index {
         let location = Location { block: destination.block, statement_index };
@@ -566,11 +588,7 @@ fn live_paths(
         }
     }
 
-    if destination_block.is_introduction_block(bcx) {
-        debug!("Destination is the introduction block!");
-        // We are finished.
-        return Some(bcx.new_polonius_block_set());
-    }
+    debug!("Not killed in destination block {destination:?}");
 
     // Traverse all blocks between `reserve_location` and `destination` in the CFG and check for
     // kills. If there is no live path from `reserve_location` to `destination`, we no for sure
@@ -590,6 +608,7 @@ fn live_paths(
     let mut valid_paths = None;
 
     while let Some((block, path)) = stack.pop() {
+        debug!("visiting {block:?}, stack is: {stack:?}");
         // Check if the loan is killed in this block.
         if is_killed_at_block(bcx, kills_cache, block) {
             continue;
@@ -632,9 +651,8 @@ fn live_paths(
         }
     }
 
-    if let Some(paths) = valid_paths.as_ref() && paths.is_empty() {
-        debug!("Found no valid paths. This probably shouldn't happen");
-        return None;
+    if let Some(paths) = valid_paths.as_ref() {
+        assert!(!paths.is_empty(), "There should have been a path!");
     }
     valid_paths
 }
