@@ -1,3 +1,4 @@
+use itertools::Itertools;
 use rustc_data_structures::fx::{FxIndexMap, FxIndexSet};
 use rustc_index::bit_set::DenseBitSet;
 use rustc_index::interval::IntervalSet;
@@ -227,7 +228,7 @@ impl<'a, 'typeck, 'tcx> LivenessResults<'a, 'typeck, 'tcx> {
     /// Adds the definitions of `local` into `self.defs`.
     fn add_defs_for(&mut self, local: Local) {
         for def in self.cx.local_use_map.defs(local) {
-            debug!("- defined at {:?}", def);
+            debug!("\t- defined at {:?}", self.cx.location_map.to_location(def));
             self.defs.insert(def);
         }
     }
@@ -295,10 +296,10 @@ impl<'a, 'typeck, 'tcx> LivenessResults<'a, 'typeck, 'tcx> {
                 );
             }
         }
-        debug!("{local:?} is use-live at:");
-        for i in self.use_live_at.iter() {
-            debug!("{:?}", self.cx.location_map.to_location(i));
-        }
+        debug!(
+            "{local:?} is use-live at: {}",
+            values::pretty_print_points(self.cx.location_map, self.use_live_at.iter())
+        );
     }
 
     /// Computes all points where local is "drop live" -- meaning its
@@ -337,7 +338,10 @@ impl<'a, 'typeck, 'tcx> LivenessResults<'a, 'typeck, 'tcx> {
         while let Some(term_point) = self.stack.pop() {
             self.compute_drop_live_points_for_block(mpi, term_point);
         }
-        debug!("{local:?} is drop-live at {:#?}", self.drop_live_at);
+        debug!(
+            "{local:?} is drop-live at: {}",
+            values::pretty_print_points(self.cx.location_map, self.drop_live_at.iter())
+        );
     }
 
     /// Executes one iteration of the drop-live analysis loop.
@@ -554,7 +558,11 @@ impl<'tcx> LivenessContext<'_, '_, 'tcx> {
     /// Stores the result that all regions in `value` are live for the
     /// points `live_at`.
     fn add_use_live_facts_for(&mut self, value: Ty<'tcx>, live_at: &IntervalSet<PointIndex>) {
-        debug!("add_use_live_facts_for(value={:?})", value);
+        debug!(
+            "add_use_live_facts_for(type={:?}, live_at={:?})",
+            value,
+            values::pretty_print_points(self.location_map, live_at.iter())
+        );
         Self::make_all_regions_live(self.location_map, self.typeck, value, live_at);
     }
 
