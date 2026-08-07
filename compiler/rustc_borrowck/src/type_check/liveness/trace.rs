@@ -242,7 +242,13 @@ impl<'a, 'typeck, 'tcx> LivenessResults<'a, 'typeck, 'tcx> {
         debug!("compute_use_live_points_for(local={:?})", local);
 
         self.stack.extend(self.cx.local_use_map.uses(local));
+
+        for p in self.cx.local_use_map.uses(local) {
+            debug!("{local:?} used at {:?}", self.cx.location_map.to_location(p))
+        }
+
         while let Some(p) = self.stack.pop() {
+            debug!("Visit location {:?}", self.cx.location_map.to_location(p));
             // We are live in this block from the closest to us of:
             //
             //  * Inclusively, the block start
@@ -273,6 +279,14 @@ impl<'a, 'typeck, 'tcx> LivenessResults<'a, 'typeck, 'tcx> {
                 // stack so that the next iteration(s) will process them.
 
                 let block = self.cx.location_map.to_location(block_start).block;
+                debug!("Visiting predecessors of {block:?}:");
+                for terminator in self.cx.body().basic_blocks.predecessors()[block]
+                    .iter()
+                    .map(|&pred_bb| self.cx.body().terminator_loc(pred_bb))
+                {
+                    debug!(?terminator);
+                }
+
                 self.stack.extend(
                     self.cx.body().basic_blocks.predecessors()[block]
                         .iter()
@@ -280,6 +294,10 @@ impl<'a, 'typeck, 'tcx> LivenessResults<'a, 'typeck, 'tcx> {
                         .map(|pred_loc| self.cx.location_map.point_from_location(pred_loc)),
                 );
             }
+        }
+        debug!("{local:?} is use-live at:");
+        for i in self.use_live_at.iter() {
+            debug!("{:?}", self.cx.location_map.to_location(i));
         }
     }
 
@@ -319,6 +337,7 @@ impl<'a, 'typeck, 'tcx> LivenessResults<'a, 'typeck, 'tcx> {
         while let Some(term_point) = self.stack.pop() {
             self.compute_drop_live_points_for_block(mpi, term_point);
         }
+        debug!("{local:?} is drop-live at {:#?}", self.drop_live_at);
     }
 
     /// Executes one iteration of the drop-live analysis loop.

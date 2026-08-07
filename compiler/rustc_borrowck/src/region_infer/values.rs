@@ -140,7 +140,11 @@ impl LivenessValues {
             points.iter().all(|point| self.location_map.point_in_range(point)),
             "Tried inserting region {region:?} with some points not belonging to this body!"
         );
-        debug!("LivenessValues::add_points(region={:?}, points={:?})", region, points);
+        debug!(
+            "LivenessValues::add_points(region={:?}, points={:?})",
+            region,
+            points.iter().map(|pi| self.location_map.to_location(pi)).collect::<Vec<_>>()
+        );
         match &mut self.live_regions {
             LiveRegions::AtPoints(these_points) => {
                 these_points.union_row(region, points);
@@ -302,12 +306,31 @@ impl<'tcx, N: Idx> RegionValues<'tcx, N> {
     /// Adds all elements in `r_from` to `r_to` (because e.g., `r_to:
     /// r_from`).
     pub(crate) fn add_region(&mut self, r_to: N, r_from: N) -> bool {
-        self.points.union_rows(r_from, r_to)
+        let to_values: FxHashSet<Location> = if let Some(to_row) = self.points.row(r_to) {
+            to_row.iter().map(|i| self.location_map.to_location(i)).collect()
+        } else {
+            FxHashSet::default()
+        };
+
+        let from_values: FxHashSet<Location> = if let Some(from_row) = self.points.row(r_from) {
+            from_row.iter().map(|i| self.location_map.to_location(i)).collect()
+        } else {
+            FxHashSet::default()
+        };
+
+        #[allow(rustc::potential_query_instability)]
+        let added_values: Vec<_> = from_values.difference(&to_values).collect();
+
+        let res = self.points.union_rows(r_from, r_to)
             | self.free_regions.union_rows(r_from, r_to)
-            | self.placeholders.union_rows(r_from, r_to)
+            | self.placeholders.union_rows(r_from, r_to);
+        if res && !added_values.is_empty() {
+            debug!("{r_to:?} ++= {r_from:?}: {:?}", added_values);
+        };
+        res
     }
 
-    /// Returns the lowest statement index in `start..=end` which is not contained by `r`.
+    /// Returns the location of the lowest statement in `start..=end` which is not contained by `r`.
     pub(crate) fn first_non_contained_inclusive(
         &self,
         r: N,
@@ -316,15 +339,29 @@ impl<'tcx, N: Idx> RegionValues<'tcx, N> {
         end: usize,
     ) -> Option<usize> {
         let row = self.points.row(r)?;
+        debug!(
+            "row: {:?}",
+            row.iter().map(|i| self.location_map.to_location(i)).collect::<Vec<_>>()
+        );
         let block = self.location_map.entry_point(block);
         let start = block.plus(start);
         let end = block.plus(end);
+        debug!(
+            "first_non_contained_inclusive({r:?}, {:?}..={:?})",
+            self.location_map.to_location(start),
+            self.location_map.to_location(end)
+        );
         let first_unset = row.first_unset_in(start..=end)?;
+        debug!("first_unset: {:?}", self.location_map.to_location(first_unset));
         Some(first_unset.index() - block.index())
     }
 
     /// Merge a row of liveness into our points.
     pub(crate) fn merge_liveness(&mut self, to: N, liveness: &IntervalSet<PointIndex>) {
+        debug!(
+            "merge_liveness {to:?}: {:?}",
+            liveness.iter().map(|i| self.location_map.to_location(i)).collect::<Vec<_>>()
+        );
         self.points.union_row(to, liveness);
     }
 

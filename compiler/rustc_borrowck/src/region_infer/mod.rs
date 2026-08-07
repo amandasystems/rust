@@ -450,8 +450,8 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         self.scc_values.contains_point(scc, p)
     }
 
-    /// Returns the lowest statement index in `start..=end` which is not contained by `r`.
-    ///
+    /// Returns the first location between `start..=end` which is not contained by `r`.
+    /// Returns `None` if `r` contains the entire interval.
     /// Panics if called before `solve()` executes.
     pub(crate) fn first_non_contained_inclusive(
         &self,
@@ -460,6 +460,7 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         start: usize,
         end: usize,
     ) -> Option<usize> {
+        debug!(?r);
         let scc = self.constraint_sccs.scc(r);
         self.scc_values.first_non_contained_inclusive(scc, block, start, end)
     }
@@ -563,7 +564,7 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         for scc_a in self.constraint_sccs.all_sccs() {
             // Walk each SCC `B` such that `A: B`...
             for &scc_b in self.constraint_sccs.successors(scc_a) {
-                debug!(?scc_b);
+                debug!(?scc_a, ?scc_b);
                 self.scc_values.add_region(scc_a, scc_b);
             }
         }
@@ -1198,6 +1199,7 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         // Note that the representative will be a universal region if there is
         // one in this SCC, so we will always check the representative here.
         let representative = self.scc_representative(longer_fr_scc);
+
         if representative != longer_fr {
             if let RegionRelationCheckResult::Error = self.check_universal_region_relation(
                 longer_fr,
@@ -1273,92 +1275,82 @@ impl<'tcx> RegionInferenceContext<'tcx> {
         shorter_fr: RegionVid,
         propagated_outlives_requirements: &mut Option<&mut Vec<ClosureOutlivesRequirement<'tcx>>>,
     ) -> RegionRelationCheckResult {
-        if let Some(propagated_outlives_requirements) = propagated_outlives_requirements {
-            // Shrink `longer_fr` until we find some non-local regions.
-            // We'll call them `longer_fr-` -- they are ever so slightly smaller than
-            // `longer_fr`.
-            let longer_fr_minus = self.universal_region_relations.non_local_lower_bounds(longer_fr);
+        let Some(propagated_outlives_requirements) = propagated_outlives_requirements else {
+            return RegionRelationCheckResult::Error;
+        };
+        // Shrink `longer_fr` until we find some non-local regions.
+        // We'll call them `longer_fr-` -- they are ever so slightly smaller than
+        // `longer_fr`.
+        let longer_fr_minus = self.universal_region_relations.non_local_lower_bounds(longer_fr);
 
-            debug!("try_propagate_universal_region_error: fr_minus={:?}", longer_fr_minus);
+        debug!("try_propagate_universal_region_error: fr_minus={:?}", longer_fr_minus);
 
-            // If we don't find a any non-local regions, we should error out as there is nothing
-            // to propagate.
-            if longer_fr_minus.is_empty() {
-                return RegionRelationCheckResult::Error;
-            }
-
-            let best_blame = self.best_blame_constraint(
-                longer_fr,
-                NllRegionVariableOrigin::FreeRegion,
-                shorter_fr,
-            );
-            let OutlivesConstraint { category, span, .. } = best_blame.constraint();
-
-            // Grow `shorter_fr` until we find some non-local regions.
-            // We will always find at least one: `'static`. We'll call
-            // them `shorter_fr+` -- they're ever so slightly larger
-            // than `shorter_fr`.
-            let shorter_fr_plus =
-                self.universal_region_relations.non_local_upper_bounds(shorter_fr);
-            debug!("try_propagate_universal_region_error: shorter_fr_plus={:?}", shorter_fr_plus);
-
-            // We then create constraints `longer_fr-: shorter_fr+` that may or may not
-            // be propagated (see below).
-            let mut constraints = vec![];
-            for fr_minus in longer_fr_minus {
-                for shorter_fr_plus in &shorter_fr_plus {
-                    constraints.push((fr_minus, *shorter_fr_plus));
-                }
-            }
-
-            // We only need to propagate at least one of the constraints for
-            // soundness. However, we want to avoid arbitrary choices here
-            // and currently don't support returning OR constraints.
-            //
-            // If any of the `shorter_fr+` regions are already outlived by `longer_fr-`,
-            // we propagate only those.
-            //
-            // Consider this example (`'b: 'a` == `a -> b`), where we try to propagate `'d: 'a`:
-            // a --> b --> d
-            //  \
-            //   \-> c
-            // Here, `shorter_fr+` of `'a` == `['b, 'c]`.
-            // Propagating `'d: 'b` is correct and should occur; `'d: 'c` is redundant because of
-            // `'d: 'b` and could reject valid code.
-            //
-            // So we filter the constraints to regions already outlived by `longer_fr-`, but if
-            // the filter yields an empty set, we fall back to the original one.
-            let subset: Vec<_> = constraints
-                .iter()
-                .filter(|&&(fr_minus, shorter_fr_plus)| {
-                    self.eval_outlives(fr_minus, shorter_fr_plus)
-                })
-                .copied()
-                .collect();
-            let propagated_constraints = if subset.is_empty() { constraints } else { subset };
-            debug!(
-                "try_propagate_universal_region_error: constraints={:?}",
-                propagated_constraints
-            );
-
-            assert!(
-                !propagated_constraints.is_empty(),
-                "Expected at least one constraint to propagate here"
-            );
-
-            for (fr_minus, fr_plus) in propagated_constraints {
-                // Push the constraint `long_fr-: shorter_fr+`
-                propagated_outlives_requirements.push(ClosureOutlivesRequirement {
-                    subject: ClosureOutlivesSubject::Region(fr_minus),
-                    outlived_free_region: fr_plus,
-                    blame_span: *span,
-                    category: *category,
-                });
-            }
-            return RegionRelationCheckResult::Propagated;
+        // If we don't find a any non-local regions, we should error out as there is nothing
+        // to propagate.
+        if longer_fr_minus.is_empty() {
+            return RegionRelationCheckResult::Error;
         }
 
-        RegionRelationCheckResult::Error
+        let best_blame =
+            self.best_blame_constraint(longer_fr, NllRegionVariableOrigin::FreeRegion, shorter_fr);
+        let OutlivesConstraint { category, span, .. } = best_blame.constraint();
+
+        // Grow `shorter_fr` until we find some non-local regions.
+        // We will always find at least one: `'static`. We'll call
+        // them `shorter_fr+` -- they're ever so slightly larger
+        // than `shorter_fr`.
+        let shorter_fr_plus = self.universal_region_relations.non_local_upper_bounds(shorter_fr);
+        debug!("try_propagate_universal_region_error: shorter_fr_plus={:?}", shorter_fr_plus);
+
+        // We then create constraints `longer_fr-: shorter_fr+` that may or may not
+        // be propagated (see below).
+        let mut constraints = vec![];
+        for fr_minus in longer_fr_minus {
+            for shorter_fr_plus in &shorter_fr_plus {
+                constraints.push((fr_minus, *shorter_fr_plus));
+            }
+        }
+
+        // We only need to propagate at least one of the constraints for
+        // soundness. However, we want to avoid arbitrary choices here
+        // and currently don't support returning OR constraints.
+        //
+        // If any of the `shorter_fr+` regions are already outlived by `longer_fr-`,
+        // we propagate only those.
+        //
+        // Consider this example (`'b: 'a` == `a -> b`), where we try to propagate `'d: 'a`:
+        // a --> b --> d
+        //  \
+        //   \-> c
+        // Here, `shorter_fr+` of `'a` == `['b, 'c]`.
+        // Propagating `'d: 'b` is correct and should occur; `'d: 'c` is redundant because of
+        // `'d: 'b` and could reject valid code.
+        //
+        // So we filter the constraints to regions already outlived by `longer_fr-`, but if
+        // the filter yields an empty set, we fall back to the original one.
+        let subset: Vec<_> = constraints
+            .iter()
+            .filter(|&&(fr_minus, shorter_fr_plus)| self.eval_outlives(fr_minus, shorter_fr_plus))
+            .copied()
+            .collect();
+        let propagated_constraints = if subset.is_empty() { constraints } else { subset };
+        debug!("try_propagate_universal_region_error: constraints={:?}", propagated_constraints);
+
+        assert!(
+            !propagated_constraints.is_empty(),
+            "Expected at least one constraint to propagate here"
+        );
+
+        for (fr_minus, fr_plus) in propagated_constraints {
+            // Push the constraint `long_fr-: shorter_fr+`
+            propagated_outlives_requirements.push(ClosureOutlivesRequirement {
+                subject: ClosureOutlivesSubject::Region(fr_minus),
+                outlived_free_region: fr_plus,
+                blame_span: *span,
+                category: *category,
+            });
+        }
+        RegionRelationCheckResult::Propagated
     }
 
     fn check_bound_universal_region(

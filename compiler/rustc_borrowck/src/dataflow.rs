@@ -214,6 +214,7 @@ impl<'tcx> OutOfScopePrecomputer<'_, 'tcx> {
         borrow_region: RegionVid,
         first_location: Location,
     ) {
+        debug!(?borrow_index, ?borrow_region, ?first_location);
         let first_block = first_location.block;
         let first_bb_data = &self.body.basic_blocks[first_block];
 
@@ -243,6 +244,7 @@ impl<'tcx> OutOfScopePrecomputer<'_, 'tcx> {
 
         // The borrow is not dead. Add successor BBs to the work list, if necessary.
         for succ_bb in first_bb_data.terminator().successors() {
+            debug!("Adding successor: {succ_bb:?}");
             if self.visited.insert(succ_bb) {
                 self.visit_stack.push(succ_bb);
             }
@@ -272,6 +274,7 @@ impl<'tcx> OutOfScopePrecomputer<'_, 'tcx> {
 
             // Add successor BBs to the work list, if necessary.
             for succ_bb in bb_data.terminator().successors() {
+                debug!("Adding successor (again): {succ_bb:?}");
                 if self.visited.insert(succ_bb) {
                     self.visit_stack.push(succ_bb);
                 }
