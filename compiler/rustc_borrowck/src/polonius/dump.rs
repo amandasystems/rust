@@ -74,6 +74,11 @@ pub(crate) fn dump_polonius_mir<'tcx>(
         let mut file = dumper.create_dump_file("html", body)?;
         emit_polonius_dump(&dumper, body, regioncx, borrow_set, &collector.constraints, &mut file)?;
     };
+
+    let _ = try {
+        let mut file = dumper.create_dump_file("dot", body)?;
+        emit_polonius_graphviz(regioncx, borrow_set, &collector.constraints, &mut file)?;
+    };
 }
 
 /// The constraints we'll dump as text or a mermaid graph.
@@ -98,6 +103,77 @@ impl LocalizedConstraintGraphVisitor for LocalizedOutlivesConstraintCollector {
             to: successor.point,
         });
     }
+}
+
+fn emit_polonius_graphviz<'tcx>(
+    regioncx: &RegionInferenceContext<'tcx>,
+    borrow_set: &BorrowSet<'tcx>,
+    localized_outlives_constraints: &[LocalizedOutlivesConstraint],
+    out: &mut dyn io::Write,
+) -> io::Result<()> {
+    let location_name = |location: Location| {
+        // A MIR location looks like `bb5[2]`. As that is not a syntactically valid mermaid node id,
+        // transform it into `BB5_2`.
+        format!("BB{}_{}", location.block.index(), location.statement_index)
+    };
+    let region_name = |region: RegionVid| format!("r{}", region.index());
+    let node_name = |region: RegionVid, point: PointIndex| {
+        let location = regioncx.liveness_constraints().location_from_point(point);
+        format!("{}_{}", region_name(region), location_name(location))
+    };
+
+    // The mermaid chart type: a top-down flowchart, which supports subgraphs.
+    writeln!(out, "digraph {{")?;
+
+    // The loans subgraph: a node per loan.
+    writeln!(out, "  subgraph loans {{")?;
+    writeln!(out, "    label = \"Loans\";")?;
+    writeln!(out, "    node [style=filled, color=lightblue];")?;
+    for loan_idx in 0..borrow_set.len() {
+        writeln!(out, "    L{loan_idx};")?;
+    }
+    writeln!(out, "  }}\n")?;
+
+    // And an edge from that loan node to where it enters the constraint graph.
+    for (loan_idx, loan) in borrow_set.iter_enumerated() {
+        writeln!(
+            out,
+            "    L{} -> {}_{};",
+            loan_idx.index(),
+            region_name(loan.region),
+            location_name(loan.reserve_location),
+        )?;
+    }
+    writeln!(out, "")?;
+    /* */
+    // The regions subgraphs containing the region/point nodes.
+    let mut points_per_region: FxIndexMap<RegionVid, FxIndexSet<PointIndex>> =
+        FxIndexMap::default();
+    for constraint in localized_outlives_constraints {
+        points_per_region.entry(constraint.source).or_default().insert(constraint.from);
+        points_per_region.entry(constraint.target).or_default().insert(constraint.to);
+    }
+    for (region, points) in points_per_region {
+        writeln!(out, "    subgraph \"{}\" {{", region_name(region))?;
+        writeln!(out, "    label =  \"{}\";", region_name(region))?;
+        for point in points {
+            writeln!(out, "    {}", node_name(region, point))?;
+        }
+        writeln!(out, "    }}\n")?;
+    }
+
+    // The constraint graph edges.
+    for constraint in localized_outlives_constraints {
+        // FIXME: add killed loans and constraint kind as edge labels.
+        writeln!(
+            out,
+            "    {} -> {};",
+            node_name(constraint.source, constraint.from),
+            node_name(constraint.target, constraint.to),
+        )?;
+    }
+    writeln!(out, "}}")?;
+    Ok(())
 }
 
 /// The polonius dump consists of:
