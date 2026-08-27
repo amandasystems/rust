@@ -1,19 +1,17 @@
+type P<'a, 'b> = for<'x> fn(&'a mut &'b i32, &'x ()) -> &'x i32;
 
-type P<'a, 'b> = for<'x> fn(&'a mut &'b u8, &'x ()) -> &'x u8;
-
-fn f<'a, 'b, 'c>(x: &'a mut &'b u8, _: &'c ()) -> &'b u8 {
+fn f<'a, 'b, 'c>(x: &'a mut &'b i32, _: &'c ()) -> &'b i32 {
     *x
 }
 
 fn main() {
-    let p: &'static mut u8 = Box::leak(Box::new(0));
-    let mid: &mut &u8 = Box::leak(Box::new(&*p));
-    let r: &u8 = (f as P<'_, '_>)(mid, &());
-    //
+    let p = Box::leak(Box::new(1));
+    let mid: &mut &i32 = Box::leak(Box::new(p));
+    let b = *(f as P<'_, '_>)(mid, &());
     if false {
-        let _: &mut &'static u8 = mid; 
+        let _: &mut &'static i32 = mid;
     } else {
-        *p = 1;
-        assert_eq!(*r, 1);  // r and p alias
-    };
+        drop(p);
+        drop(b); // `p` droppped again here via alias in `b`!
+    }
 }
