@@ -158,10 +158,10 @@ where
     let mut constraints = DropckConstraint::empty();
     while let Some((ty, depth)) = ty_stack.pop() {
         debug!(
-            "{} kinds, {} overflows, {} ty_stack",
-            result.kinds.len(),
+            "{:#?} kinds, {} overflows, {:#?} ty_stack",
+            result.kinds,
             result.overflows.len(),
-            ty_stack.len()
+            ty_stack
         );
         dtorck_constraint_for_ty_inner(
             tcx,
@@ -266,8 +266,12 @@ pub fn dtorck_constraint_for_ty_inner<'tcx>(
     }
 
     if trivial_dropck_outlives(tcx, ty) {
+        debug!("type {ty:?} has trivial dropck outlives!");
         return;
     }
+    let kind = *ty.kind();
+
+    debug!(?kind);
 
     match *ty.kind() {
         ty::Bool
@@ -377,6 +381,12 @@ pub fn dtorck_constraint_for_ty_inner<'tcx>(
         ty::Adt(def, args) => {
             let DropckConstraint { dtorck_types, outlives, overflows } =
                 tcx.at(span).adt_dtorck_constraint(def.did());
+            debug!(
+                "Computing dropck for {:?}: {:?},dtorck_types={:?}",
+                def.did(),
+                outlives,
+                dtorck_types
+            );
             // FIXME: we can try to recursively `dtorck_constraint_on_ty`
             // there, but that needs some way to handle cycles.
             constraints.dtorck_types.extend(
@@ -404,6 +414,7 @@ pub fn dtorck_constraint_for_ty_inner<'tcx>(
 
         // Types that can't be resolved. Pass them forward.
         ty::Alias(..) | ty::Param(..) => {
+            debug!("It's an alias!");
             constraints.dtorck_types.push(ty);
         }
 
