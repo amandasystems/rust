@@ -16,7 +16,7 @@ use rustc_middle::ty::error::TypeError;
 use rustc_middle::ty::{
     self, RePlaceholder, Region, RegionVid, Ty, TyCtxt, TypeFoldable, UniverseIndex,
 };
-use rustc_span::Span;
+use rustc_span::{Span, bug};
 use rustc_trait_selection::error_reporting::InferCtxtErrorExt;
 use rustc_trait_selection::error_reporting::infer::nice_region_error::NiceRegionError;
 use rustc_trait_selection::traits::ObligationCtxt;
@@ -28,6 +28,16 @@ use crate::MirBorrowckCtxt;
 use crate::session_diagnostics::{
     HigherRankedErrorCause, HigherRankedLifetimeError, HigherRankedSubtypeError,
 };
+
+#[derive(Debug)]
+pub(crate) enum ErrorElement<'tcx> {
+    /// The error was caused by an existential region that cannot name us.
+    ExistentialThatCannotNameUs(ty::Region<'tcx>),
+    /// The error was caused by a placeholder-placeholder conflict.
+    DifferentPlaceholder(ty::PlaceholderRegion<'tcx>),
+    /// The error was caused by either a Location or a free region.
+    Other,
+}
 
 /// What operation a universe was created for.
 #[derive(Clone)]
@@ -54,32 +64,31 @@ impl<'tcx> UniverseInfo<'tcx> {
         &self,
         mbcx: &mut MirBorrowckCtxt<'_, '_, 'tcx>,
         placeholder: ty::PlaceholderRegion<'tcx>,
-        error_element: Option<ty::PlaceholderRegion<'tcx>>,
+        error_element: ErrorElement<'tcx>,
         cause: ObligationCause<'tcx>,
     ) {
-        match *self {
+        let err = match *self {
             UniverseInfo::RelateTys { expected, found } => {
-                let err = mbcx.infcx.err_ctxt().report_mismatched_types(
+                mbcx.infcx.err_ctxt().report_mismatched_types(
                     &cause,
                     mbcx.infcx.param_env,
                     expected,
                     found,
                     TypeError::RegionsPlaceholderMismatch,
-                );
-                mbcx.buffer_error(err);
+                )
             }
             UniverseInfo::TypeOp(ref type_op_info) => {
-                type_op_info.report_erroneous_element(mbcx, placeholder, error_element, cause);
+                type_op_info.diag_from_error_element(mbcx, placeholder, error_element, cause)
             }
             UniverseInfo::Other => {
                 // FIXME: This error message isn't great, but it doesn't show
                 // up in the existing UI tests. Consider investigating this
                 // some more.
-                mbcx.buffer_error(
-                    mbcx.dcx().create_err(HigherRankedSubtypeError { span: cause.span }),
-                );
+                mbcx.dcx().create_err(HigherRankedSubtypeError { span: cause.span })
             }
-        }
+        };
+        debug!(?err);
+        mbcx.buffer_error(err);
     }
 }
 
@@ -130,6 +139,29 @@ pub(crate) trait TypeOpInfo<'tcx> {
 
     fn base_universe(&self) -> ty::UniverseIndex;
 
+    /// Scale a placeholder region by our base universe.
+    fn placeholder_with_adjusted_universe(
+        &self,
+        tcx: TyCtxt<'tcx>,
+        placeholder: ty::PlaceholderRegion<'tcx>,
+    ) -> ty::Region<'tcx> {
+        let base_universe = self.base_universe();
+        debug!(?base_universe);
+
+        ty::Region::new_placeholder(
+            tcx,
+            ty::PlaceholderRegion::new(
+                placeholder
+                    .universe
+                    .as_u32()
+                    .checked_sub(base_universe.as_u32())
+                    .unwrap_or_else(|| bug!("placeholder universe below base universe"))
+                    .into(),
+                placeholder.bound,
+            ),
+        )
+    }
+
     fn nice_error<'diag>(
         &self,
         mbcx: &mut MirBorrowckCtxt<'_, 'diag, 'tcx>,
@@ -142,48 +174,31 @@ pub(crate) trait TypeOpInfo<'tcx> {
     /// values of `placeholder`, but this cannot be proven to
     /// hold. Report an error.
     #[instrument(level = "debug", skip(self, mbcx))]
-    fn report_erroneous_element(
+    fn diag_from_error_element<'diag>(
         &self,
-        mbcx: &mut MirBorrowckCtxt<'_, '_, 'tcx>,
+        mbcx: &mut MirBorrowckCtxt<'_, 'diag, 'tcx>,
         placeholder: ty::PlaceholderRegion<'tcx>,
-        error_element: Option<ty::PlaceholderRegion<'tcx>>,
+        error_element: ErrorElement<'tcx>,
         cause: ObligationCause<'tcx>,
-    ) {
+    ) -> Diag<'diag> {
         let tcx = mbcx.infcx.tcx;
-        let base_universe = self.base_universe();
-        debug!(?base_universe);
-
-        let Some(adjusted_universe) =
-            placeholder.universe.as_u32().checked_sub(base_universe.as_u32())
-        else {
-            mbcx.buffer_error(self.fallback_error(tcx, cause.span));
-            return;
-        };
-
-        let placeholder_region = ty::Region::new_placeholder(
-            tcx,
-            ty::PlaceholderRegion::new(adjusted_universe.into(), placeholder.bound),
-        );
+        let placeholder_region = self.placeholder_with_adjusted_universe(tcx, placeholder);
 
         // FIXME: one day this should just be error_element,
         // and this method shouldn't do anything.
-        let error_region = error_element.and_then(|e| {
-            let adjusted_universe = e.universe.as_u32().checked_sub(base_universe.as_u32());
-            adjusted_universe.map(|adjusted| {
-                ty::Region::new_placeholder(
-                    tcx,
-                    ty::PlaceholderRegion::new(adjusted.into(), e.bound),
-                )
-            })
-        });
-
-        debug!(?placeholder_region);
+        let error_region = match error_element {
+            ErrorElement::ExistentialThatCannotNameUs(e) => Some(e),
+            ErrorElement::DifferentPlaceholder(p) => {
+                Some(self.placeholder_with_adjusted_universe(tcx, p))
+            }
+            ErrorElement::Other => None,
+        };
 
         let span = cause.span;
         let nice_error = self.nice_error(mbcx, cause, placeholder_region, error_region);
 
         debug!(?nice_error);
-        mbcx.buffer_error(nice_error.unwrap_or_else(|| self.fallback_error(tcx, span)));
+        nice_error.unwrap_or_else(|| self.fallback_error(tcx, span))
     }
 }
 
