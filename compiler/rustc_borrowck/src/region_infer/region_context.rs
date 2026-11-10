@@ -611,10 +611,7 @@ impl<'tcx> RegionInferenceContextInner<'tcx> {
             }
         });
 
-        // Edge case: it's possible that `'from_region` is an unnameable placeholder.
-        let mut path = if let Some(unnameable) = due_to_placeholder_outlives
-            && unnameable != from_region
-        {
+        let mut path = if let Some(unnameable) = due_to_placeholder_outlives {
             // We ignore the extra edges due to unnameable placeholders to get
             // an explanation that was present in the original constraint graph.
             self.constraint_path_to(from_region, |r| r == unnameable, false).unwrap().0
@@ -1544,6 +1541,7 @@ impl<'tcx> UnsolvedRegionInferenceContext<'tcx> {
         if self.universal_region_relations.outlives(longer_fr, shorter_fr) {
             RegionRelationCheckResult::Ok
         } else {
+            debug!("Relation {longer_fr:?}: {shorter_fr:?} not known to hold!");
             // If we are not in a context where we can't propagate errors, or we
             // could not shrink `fr` to something smaller, then just report an
             // error.
@@ -1679,8 +1677,24 @@ impl<'tcx> UnsolvedRegionInferenceContext<'tcx> {
                 longer_fr,
                 illegally_outlived_r,
             });
+            return;
         } else {
             debug!("check_bound_universal_region: all bounds satisfied");
+        }
+
+        // Check for placeholder leaks
+        let (scc_max_universe, existential_rvid) =
+            self.scc_annotations[longer_fr_scc].max_nameable_univere_and_existential();
+        let declared_universe = self.definitions[longer_fr].universe;
+        if scc_max_universe.cannot_name(declared_universe) {
+            debug!(?declared_universe, ?scc_max_universe);
+            debug!(
+                "`{longer_fr:?}: {existential_rvid:?}`, but {existential_rvid:?} cannot name {placeholder:?}"
+            );
+            errors_buffer.push(RegionErrorKind::PlaceholderOutlivesExistentialThatCannotNameIt {
+                unnameable_p: longer_fr,
+                illegal_e: existential_rvid,
+            });
         }
     }
 

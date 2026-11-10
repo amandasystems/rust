@@ -124,6 +124,11 @@ impl RegionTracker {
         self.max_nameable_universe.0
     }
 
+    /// Same as `max_nameable_universe()` but also return the most restrictive existential that got us there.
+    pub(crate) fn max_nameable_univere_and_existential(self) -> (UniverseIndex, RegionVid) {
+        self.max_nameable_universe
+    }
+
     pub(crate) fn max_placeholder_universe_reached(self) -> UniverseIndex {
         self.reachable_placeholders.map(|pls| pls.max_universe.0).unwrap_or(UniverseIndex::ROOT)
     }
@@ -323,6 +328,7 @@ pub(crate) fn rewrite_placeholder_outlives<'tcx>(
     // recompute SCCs.
     let mut added_constraints = false;
 
+    let definitions = annotations.definitions;
     let annotations = &annotations.scc_to_annotation;
 
     for scc in sccs.all_sccs() {
@@ -332,6 +338,21 @@ pub(crate) fn rewrite_placeholder_outlives<'tcx>(
         }
 
         let annotation = annotations[scc];
+        debug!(?annotation);
+
+        // Placeholder regions have two special error conditions, both of which are
+        // handled later, in `RegionInference::check_bound_region()`.
+        if let Representative::Placeholder(p) = annotation.representative {
+            // Case 1: placeholder outlives another placeholder: requires no special treatment.
+
+            // Case 2: we are a placeholder for a bound region that outlived an existential
+            // that cannot name us. This will appear as `U(SCC('p)) < U('p)`, i.e. the placeholder
+            // is no longer nameable by its own SCC.
+            if annotation.max_nameable_universe().cannot_name(definitions[p].universe) {
+                // No use forcing `'p: 'static`; that will only ever generate extra errors
+                continue;
+            }
+        }
 
         let Some((max_u, max_u_rvid)) = annotation.unnameable_placeholder() else {
             continue;
@@ -346,25 +367,12 @@ pub(crate) fn rewrite_placeholder_outlives<'tcx>(
         // That constraint is annotated with some placeholder `unnameable` where
         // `unnameable` is unnameable from `r` and there is a path in the constraint graph
         // between them.
-        //
-        // There is one exception; if some other region in this SCC can't name `'r`, then
-        // we pick the region with the smallest universe in the SCC, so that a path can
-        // always start in `'r` to find a motivation that isn't cyclic.
-        let blame_to = if annotation.representative.rvid() == max_u_rvid {
-            // Assertion: the region that lowered our universe is an existential one and we are a placeholder!
 
-            // The SCC's representative is not nameable from some region
-            // that ends up in the SCC.
-            let small_universed_rvid = annotation.max_nameable_universe.1;
-            debug!(
-                "{small_universed_rvid:?} lowered our universe to {:?}",
-                annotation.max_nameable_universe()
-            );
-            small_universed_rvid
-        } else {
-            // `max_u_rvid` is not nameable by the SCC's representative.
-            max_u_rvid
-        };
+        let blame_to = max_u_rvid;
+        assert!(
+            max_u_rvid != annotation.representative.rvid(),
+            "Would have added a cyclic constraint to/from {max_u_rvid:?}. This should never happen!"
+        );
 
         // FIXME: if we can extract a useful blame span here, future error
         // reporting and constraint search can be simplified.

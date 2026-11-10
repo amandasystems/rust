@@ -106,6 +106,9 @@ pub(crate) enum RegionErrorKind<'tcx> {
     /// A generic bound failure for a type test (`T: 'a`).
     TypeTestError { type_test: TypeTest<'tcx> },
 
+    /// 'p outlives 'e, but 'e cannot name 'p.
+    PlaceholderOutlivesExistentialThatCannotNameIt { unnameable_p: RegionVid, illegal_e: RegionVid },
+
     /// 'p outlives 'r, which does not hold. 'p is always a placeholder
     /// and 'r is some other region.
     PlaceholderOutlivesIllegalRegion { longer_fr: RegionVid, illegally_outlived_r: RegionVid },
@@ -362,7 +365,19 @@ impl<'diag, 'tcx> MirBorrowckCtxt<'_, 'diag, 'tcx> {
                     longer_fr,
                     illegally_outlived_r,
                 } => {
+                    // FIXME: See the note below; there is probably enough information here
+                    // to produce an error message.
                     self.report_erroneous_rvid_reaches_placeholder(longer_fr, illegally_outlived_r)
+                }
+
+                RegionErrorKind::PlaceholderOutlivesExistentialThatCannotNameIt {
+                    unnameable_p,
+                    illegal_e,
+                } => {
+                    // FIXME: We should use the context knowledge we have here to generate the error message!
+                    // These will almost certainly generate a `RegionResolutionError::UpperBoundUniverseConflict`,
+                    // but this needs further investigation.
+                    self.report_erroneous_rvid_reaches_placeholder(unnameable_p, illegal_e);
                 }
 
                 RegionErrorKind::RegionError { fr_origin, longer_fr, shorter_fr, is_reported } => {
