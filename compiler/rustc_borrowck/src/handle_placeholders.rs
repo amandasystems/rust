@@ -292,10 +292,6 @@ pub(crate) fn compute_sccs_applying_placeholder_outlives_constraints<'tcx>(
         &mut outlives_constraints,
     );
 
-    if added_constraints {
-        eprintln!("ADDED CONSTRAINTS!");
-    }
-
     let (constraint_sccs, scc_annotations) = if added_constraints {
         let mut annotations = SccAnnotations::init(&definitions);
 
@@ -348,6 +344,17 @@ pub(crate) fn rewrite_placeholder_outlives<'tcx>(
         // handled later, in `RegionInference::check_bound_region()`.
         if let Representative::Placeholder(p) = annotation.representative {
             // Case 1: placeholder outlives another placeholder: requires no special treatment.
+
+            if let Some(PlaceholderReachability {
+                max_universe: _,
+                min_placeholder,
+                max_placeholder,
+            }) = annotation.reachable_placeholders
+                && (min_placeholder != p || max_placeholder != p)
+            {
+                eprintln!("PLACEHOLDER CONFLICT");
+                continue;
+            }
 
             // Case 2: we are a placeholder for a bound region that outlived an existential
             // that cannot name us. This will appear as `U(SCC('p)) < U('p)`, i.e. the placeholder
