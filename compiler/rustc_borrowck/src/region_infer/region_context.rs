@@ -611,7 +611,9 @@ impl<'tcx> RegionInferenceContextInner<'tcx> {
             }
         });
 
-        let mut path = if let Some(unnameable) = due_to_placeholder_outlives {
+        let mut path = if let Some(unnameable) = due_to_placeholder_outlives
+            && unnameable != from_region
+        {
             // We ignore the extra edges due to unnameable placeholders to get
             // an explanation that was present in the original constraint graph.
             self.constraint_path_to(from_region, |r| r == unnameable, false).unwrap().0

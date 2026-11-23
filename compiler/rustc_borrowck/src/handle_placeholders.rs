@@ -292,6 +292,10 @@ pub(crate) fn compute_sccs_applying_placeholder_outlives_constraints<'tcx>(
         &mut outlives_constraints,
     );
 
+    if added_constraints {
+        eprintln!("ADDED CONSTRAINTS!");
+    }
+
     let (constraint_sccs, scc_annotations) = if added_constraints {
         let mut annotations = SccAnnotations::init(&definitions);
 
@@ -349,6 +353,10 @@ pub(crate) fn rewrite_placeholder_outlives<'tcx>(
             // that cannot name us. This will appear as `U(SCC('p)) < U('p)`, i.e. the placeholder
             // is no longer nameable by its own SCC.
             if annotation.max_nameable_universe().cannot_name(definitions[p].universe) {
+                debug!(
+                    "Placeholder {p:?} ({scc:?}) outlives existential that cannot name it {:?}!",
+                    annotation.max_nameable_univere_and_existential()
+                );
                 // No use forcing `'p: 'static`; that will only ever generate extra errors
                 continue;
             }
@@ -369,6 +377,10 @@ pub(crate) fn rewrite_placeholder_outlives<'tcx>(
         // between them.
 
         let blame_to = max_u_rvid;
+        assert!(
+            matches!(definitions[blame_to].origin, NllRegionVariableOrigin::Placeholder(_)),
+            "{blame_to:?} should have been a placeholder!"
+        );
         assert!(
             max_u_rvid != annotation.representative.rvid(),
             "Would have added a cyclic constraint to/from {max_u_rvid:?}. This should never happen!"
