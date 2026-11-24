@@ -1665,6 +1665,23 @@ impl<'tcx> UnsolvedRegionInferenceContext<'tcx> {
         let longer_fr_scc = self.constraint_sccs.scc(longer_fr);
         debug!("check_bound_universal_region: longer_fr_scc={:?}", longer_fr_scc,);
 
+        let mut found_other_placeholder = false;
+        let mut found_other_element = false;
+        for element in self.scc_values.elements_contained_in(longer_fr_scc) {
+            match element {
+                RegionElement::Location(_location) => found_other_element = true,
+                RegionElement::RootUniversalRegion(_region_vid) => found_other_element = true,
+                RegionElement::PlaceholderRegion(other) if placeholder != other => {
+                    found_other_placeholder = true
+                }
+                _ => {}
+            };
+
+            if found_other_placeholder == !found_other_element {
+                eprintln!("PLACEHOLDER CONFLICT");
+            }
+        }
+
         // If we have some bound universal region `'a`, then the only
         // elements it can contain is itself -- we don't know anything
         // else about it!

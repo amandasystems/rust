@@ -352,7 +352,7 @@ pub(crate) fn rewrite_placeholder_outlives<'tcx>(
             }) = annotation.reachable_placeholders
                 && (min_placeholder != p || max_placeholder != p)
             {
-                eprintln!("PLACEHOLDER CONFLICT");
+                //
                 continue;
             }
 
