@@ -16,7 +16,7 @@ use rustc_middle::ty::error::TypeError;
 use rustc_middle::ty::{
     self, RePlaceholder, Region, RegionVid, Ty, TyCtxt, TypeFoldable, UniverseIndex,
 };
-use rustc_span::{Span, bug};
+use rustc_span::Span;
 use rustc_trait_selection::error_reporting::InferCtxtErrorExt;
 use rustc_trait_selection::error_reporting::infer::nice_region_error::NiceRegionError;
 use rustc_trait_selection::traits::ObligationCtxt;
@@ -28,16 +28,6 @@ use crate::MirBorrowckCtxt;
 use crate::session_diagnostics::{
     HigherRankedErrorCause, HigherRankedLifetimeError, HigherRankedSubtypeError,
 };
-
-#[derive(Debug)]
-pub(crate) enum ErrorElement<'tcx> {
-    /// The error was caused by an existential region that cannot name us.
-    ExistentialThatCannotNameUs(ty::Region<'tcx>),
-    /// The error was caused by a placeholder-placeholder conflict.
-    DifferentPlaceholder(ty::PlaceholderRegion<'tcx>),
-    /// The error was caused by either a Location or a free region.
-    Other,
-}
 
 /// What operation a universe was created for.
 #[derive(Clone)]
@@ -64,7 +54,7 @@ impl<'tcx> UniverseInfo<'tcx> {
         &self,
         mbcx: &mut MirBorrowckCtxt<'_, '_, 'tcx>,
         placeholder: ty::PlaceholderRegion<'tcx>,
-        error_element: ErrorElement<'tcx>,
+        error_element: Option<ty::PlaceholderRegion<'tcx>>,
         cause: ObligationCause<'tcx>,
     ) {
         let err = match *self {
@@ -144,22 +134,16 @@ pub(crate) trait TypeOpInfo<'tcx> {
         &self,
         tcx: TyCtxt<'tcx>,
         placeholder: ty::PlaceholderRegion<'tcx>,
-    ) -> ty::Region<'tcx> {
+    ) -> Option<ty::Region<'tcx>> {
         let base_universe = self.base_universe();
         debug!(?base_universe);
+        let adjusted_universe =
+            placeholder.universe.as_u32().checked_sub(base_universe.as_u32())?.into();
 
-        ty::Region::new_placeholder(
+        Some(ty::Region::new_placeholder(
             tcx,
-            ty::PlaceholderRegion::new(
-                placeholder
-                    .universe
-                    .as_u32()
-                    .checked_sub(base_universe.as_u32())
-                    .unwrap_or_else(|| bug!("placeholder universe below base universe"))
-                    .into(),
-                placeholder.bound,
-            ),
-        )
+            ty::PlaceholderRegion::new(adjusted_universe, placeholder.bound),
+        ))
     }
 
     fn nice_error<'diag>(
@@ -178,21 +162,20 @@ pub(crate) trait TypeOpInfo<'tcx> {
         &self,
         mbcx: &mut MirBorrowckCtxt<'_, 'diag, 'tcx>,
         placeholder: ty::PlaceholderRegion<'tcx>,
-        error_element: ErrorElement<'tcx>,
+        error_element: Option<ty::PlaceholderRegion<'tcx>>,
         cause: ObligationCause<'tcx>,
     ) -> Diag<'diag> {
         let tcx = mbcx.infcx.tcx;
-        let placeholder_region = self.placeholder_with_adjusted_universe(tcx, placeholder);
+
+        let Some(placeholder_region) = self.placeholder_with_adjusted_universe(tcx, placeholder)
+        else {
+            return self.fallback_error(tcx, cause.span);
+        };
 
         // FIXME: one day this should just be error_element,
         // and this method shouldn't do anything.
-        let error_region = match error_element {
-            ErrorElement::ExistentialThatCannotNameUs(e) => Some(e),
-            ErrorElement::DifferentPlaceholder(p) => {
-                Some(self.placeholder_with_adjusted_universe(tcx, p))
-            }
-            ErrorElement::Other => None,
-        };
+        let error_region =
+            error_element.and_then(|e| self.placeholder_with_adjusted_universe(tcx, e));
 
         let span = cause.span;
         let nice_error = self.nice_error(mbcx, cause, placeholder_region, error_region);

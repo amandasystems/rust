@@ -92,9 +92,6 @@ pub(crate) struct RegionTracker {
     /// It is the smallest maximum universe of any reachable region.
     min_max_nameable_universe: UniverseIndex,
 
-    /// The smallest-universed existential reachable from us, if any.
-    most_restrictive_existential: Option<(UniverseIndex, RegionVid)>,
-
     /// The representative Region Variable Id for this SCC.
     pub(crate) representative: Representative,
 }
@@ -115,14 +112,6 @@ impl RegionTracker {
         Self {
             reachable_placeholders,
             min_max_nameable_universe: definition.universe,
-            most_restrictive_existential: if matches!(
-                definition.origin,
-                NllRegionVariableOrigin::Existential { name: _ }
-            ) {
-                Some((definition.universe, rvid))
-            } else {
-                None
-            },
             representative: Representative::new(rvid, definition),
         }
     }
@@ -132,11 +121,6 @@ impl RegionTracker {
     /// `max_nameable(r) = min (max_nameable(r') for r' reachable from r)`
     pub(crate) fn max_nameable_universe(self) -> UniverseIndex {
         self.min_max_nameable_universe
-    }
-
-    /// Return the most universe-restrictive existential region reachable from here.
-    pub(crate) fn hardest_constraining_existential(self) -> Option<(UniverseIndex, RegionVid)> {
-        self.most_restrictive_existential
     }
 
     pub(crate) fn max_placeholder_universe_reached(self) -> UniverseIndex {
@@ -176,19 +160,6 @@ impl scc::Annotation for RegionTracker {
     fn update_reachable(&mut self, other: &Self) {
         self.min_max_nameable_universe =
             self.min_max_nameable_universe.min(other.min_max_nameable_universe);
-        match (
-            self.most_restrictive_existential.as_mut(),
-            other.most_restrictive_existential.as_ref(),
-        ) {
-            (None, None) | (Some(_), None) => (),
-            (None, Some(_)) => {
-                self.most_restrictive_existential = other.most_restrictive_existential
-            }
-            (Some(_), Some(_)) => {
-                self.most_restrictive_existential =
-                    self.most_restrictive_existential.min(other.most_restrictive_existential)
-            }
-        };
         match (self.reachable_placeholders.as_mut(), other.reachable_placeholders.as_ref()) {
             (None, None) | (Some(_), None) => (),
             (None, Some(theirs)) => self.reachable_placeholders = Some(*theirs),

@@ -1680,28 +1680,40 @@ impl<'tcx> UnsolvedRegionInferenceContext<'tcx> {
                 illegally_outlived_r,
             });
             return;
-        } else {
-            debug!("check_bound_universal_region: all bounds satisfied");
         }
 
         // Check for placeholder leaks
-        if let Some((scc_max_universe, existential_rvid)) =
-            self.scc_annotations[longer_fr_scc].hardest_constraining_existential()
+        let longer_fr_declared_universe = self.definitions[longer_fr].universe;
+        let scc_computed_universe = self.scc_annotations[longer_fr_scc].max_nameable_universe();
+
+        // Our bound region cannot be named by its own SCC; figure out why! The
+        // most probable reason is that it outlived an existential that cannot
+        // name it. It may also have been another placeholder for a bound region
+        // or a free region, but they were handled by the loop above since they
+        // have elements. Not all existentials do.
+        if scc_computed_universe.cannot_name(longer_fr_declared_universe)
+            && let Some((_, illegally_outlived_r)) = self.constraint_path_to(
+                longer_fr,
+                |r| {
+                    let is_existential = matches!(
+                        self.definitions[r].origin,
+                        NllRegionVariableOrigin::Existential { name: _ }
+                    );
+                    let their_universe = self.definitions[r].universe;
+                    // There may be multiple existentials that can't name us,
+                    // pick the one we reach first as a heuristic.
+                    their_universe.cannot_name(longer_fr_declared_universe) && is_existential
+                },
+                false,
+            )
         {
-            let declared_universe = self.definitions[longer_fr].universe;
-            if scc_max_universe.cannot_name(declared_universe) {
-                debug!(?declared_universe, ?scc_max_universe);
-                debug!(
-                    "`{longer_fr:?}: {existential_rvid:?}`, but {existential_rvid:?} cannot name {placeholder:?}"
-                );
-                errors_buffer.push(
-                    RegionErrorKind::PlaceholderOutlivesExistentialThatCannotNameIt {
-                        unnameable_p: longer_fr,
-                        illegal_e: existential_rvid,
-                    },
-                );
-            }
+            errors_buffer.push(RegionErrorKind::PlaceholderOutlivesIllegalRegion {
+                longer_fr,
+                illegally_outlived_r,
+            });
+            return;
         }
+        debug!("check_bound_universal_region: all bounds satisfied");
     }
 
     /// Get the region outlived by `longer_fr` and live at `element`.

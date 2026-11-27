@@ -30,7 +30,6 @@ use tracing::{debug, instrument, trace};
 
 use super::{LIMITATION_NOTE, OutlivesSuggestionBuilder, RegionName, RegionNameSource};
 use crate::consumers::OutlivesConstraint;
-use crate::diagnostics::bound_region_errors::ErrorElement;
 use crate::nll::ConstraintDescription;
 use crate::region_infer::{RegionInferenceContext, TypeTest};
 use crate::session_diagnostics::{
@@ -106,9 +105,6 @@ impl std::fmt::Debug for RegionErrors<'_> {
 pub(crate) enum RegionErrorKind<'tcx> {
     /// A generic bound failure for a type test (`T: 'a`).
     TypeTestError { type_test: TypeTest<'tcx> },
-
-    /// 'p outlives 'e, but 'e cannot name 'p.
-    PlaceholderOutlivesExistentialThatCannotNameIt { unnameable_p: RegionVid, illegal_e: RegionVid },
 
     /// 'p outlives 'r, which does not hold. 'p is always a placeholder
     /// and 'r is some other region.
@@ -370,33 +366,14 @@ impl<'diag, 'tcx> MirBorrowckCtxt<'_, 'diag, 'tcx> {
                     use NllRegionVariableOrigin::*;
                     let error_element = match self.regioncx.definitions[illegally_outlived_r].origin
                     {
-                        FreeRegion | Existential { .. } => ErrorElement::Other,
-                        Placeholder(other_placeholder) => {
-                            ErrorElement::DifferentPlaceholder(other_placeholder)
-                        }
+                        FreeRegion | Existential { .. } => None,
+                        Placeholder(other_placeholder) => Some(other_placeholder),
                     };
                     self.report_erroneous_rvid_reaches_placeholder(
                         longer_fr,
                         illegally_outlived_r,
                         error_element,
                     )
-                }
-
-                RegionErrorKind::PlaceholderOutlivesExistentialThatCannotNameIt {
-                    unnameable_p,
-                    illegal_e,
-                } => {
-                    // FIXME: We should use the context knowledge we have here to generate the error message!
-                    // These will almost certainly generate a `RegionResolutionError::UpperBoundUniverseConflict`,
-                    // but this needs further investigation.
-                    let error_element = ErrorElement::ExistentialThatCannotNameUs(
-                        ty::Region::new_var(self.infcx.tcx, illegal_e),
-                    );
-                    self.report_erroneous_rvid_reaches_placeholder(
-                        unnameable_p,
-                        illegal_e,
-                        error_element,
-                    );
                 }
 
                 RegionErrorKind::RegionError { fr_origin, longer_fr, shorter_fr, is_reported } => {
@@ -597,7 +574,7 @@ impl<'diag, 'tcx> MirBorrowckCtxt<'_, 'diag, 'tcx> {
         &mut self,
         longer_fr: RegionVid,
         error_vid: RegionVid,
-        error_element: ErrorElement<'tcx>,
+        error_element: Option<ty::PlaceholderRegion<'tcx>>,
     ) {
         let origin_longer = self.regioncx.definitions[longer_fr].origin;
 
