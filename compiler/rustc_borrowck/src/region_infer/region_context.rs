@@ -1685,18 +1685,22 @@ impl<'tcx> UnsolvedRegionInferenceContext<'tcx> {
         }
 
         // Check for placeholder leaks
-        let (scc_max_universe, existential_rvid) =
-            self.scc_annotations[longer_fr_scc].max_nameable_univere_and_existential();
-        let declared_universe = self.definitions[longer_fr].universe;
-        if scc_max_universe.cannot_name(declared_universe) {
-            debug!(?declared_universe, ?scc_max_universe);
-            debug!(
-                "`{longer_fr:?}: {existential_rvid:?}`, but {existential_rvid:?} cannot name {placeholder:?}"
-            );
-            errors_buffer.push(RegionErrorKind::PlaceholderOutlivesExistentialThatCannotNameIt {
-                unnameable_p: longer_fr,
-                illegal_e: existential_rvid,
-            });
+        if let Some((scc_max_universe, existential_rvid)) =
+            self.scc_annotations[longer_fr_scc].hardest_constraining_existential()
+        {
+            let declared_universe = self.definitions[longer_fr].universe;
+            if scc_max_universe.cannot_name(declared_universe) {
+                debug!(?declared_universe, ?scc_max_universe);
+                debug!(
+                    "`{longer_fr:?}: {existential_rvid:?}`, but {existential_rvid:?} cannot name {placeholder:?}"
+                );
+                errors_buffer.push(
+                    RegionErrorKind::PlaceholderOutlivesExistentialThatCannotNameIt {
+                        unnameable_p: longer_fr,
+                        illegal_e: existential_rvid,
+                    },
+                );
+            }
         }
     }
 

@@ -89,9 +89,11 @@ pub(crate) struct RegionTracker {
     reachable_placeholders: Option<PlaceholderReachability>,
 
     /// The largest universe nameable from this SCC.
-    /// It is the smallest nameable universes of all
-    /// existential regions reachable from it. Small Rvids are preferred.
-    max_nameable_universe: (UniverseIndex, RegionVid),
+    /// It is the smallest maximum universe of any reachable region.
+    min_max_nameable_universe: UniverseIndex,
+
+    /// The smallest-universed existential reachable from us, if any.
+    most_restrictive_existential: Option<(UniverseIndex, RegionVid)>,
 
     /// The representative Region Variable Id for this SCC.
     pub(crate) representative: Representative,
@@ -112,7 +114,15 @@ impl RegionTracker {
 
         Self {
             reachable_placeholders,
-            max_nameable_universe: (definition.universe, rvid),
+            min_max_nameable_universe: definition.universe,
+            most_restrictive_existential: if matches!(
+                definition.origin,
+                NllRegionVariableOrigin::Existential { name: _ }
+            ) {
+                Some((definition.universe, rvid))
+            } else {
+                None
+            },
             representative: Representative::new(rvid, definition),
         }
     }
@@ -121,12 +131,12 @@ impl RegionTracker {
     /// max-nameable-universe of any reachable region, or
     /// `max_nameable(r) = min (max_nameable(r') for r' reachable from r)`
     pub(crate) fn max_nameable_universe(self) -> UniverseIndex {
-        self.max_nameable_universe.0
+        self.min_max_nameable_universe
     }
 
-    /// Same as `max_nameable_universe()` but also return the most restrictive existential that got us there.
-    pub(crate) fn max_nameable_univere_and_existential(self) -> (UniverseIndex, RegionVid) {
-        self.max_nameable_universe
+    /// Return the most universe-restrictive existential region reachable from here.
+    pub(crate) fn hardest_constraining_existential(self) -> Option<(UniverseIndex, RegionVid)> {
+        self.most_restrictive_existential
     }
 
     pub(crate) fn max_placeholder_universe_reached(self) -> UniverseIndex {
@@ -145,7 +155,7 @@ impl RegionTracker {
         // of `other`. This only exists to avoid errors in case that scc already
         // depends on a placeholder it cannot name itself.
         self.max_nameable_universe().can_name(other.max_nameable_universe())
-            || other.placeholders_can_be_named_by(self.max_nameable_universe.0)
+            || other.placeholders_can_be_named_by(self.max_nameable_universe())
     }
 
     /// If this SCC reaches a placeholder it can't name, return it.
@@ -164,7 +174,21 @@ impl scc::Annotation for RegionTracker {
     }
 
     fn update_reachable(&mut self, other: &Self) {
-        self.max_nameable_universe = self.max_nameable_universe.min(other.max_nameable_universe);
+        self.min_max_nameable_universe =
+            self.min_max_nameable_universe.min(other.min_max_nameable_universe);
+        match (
+            self.most_restrictive_existential.as_mut(),
+            other.most_restrictive_existential.as_ref(),
+        ) {
+            (None, None) | (Some(_), None) => (),
+            (None, Some(_)) => {
+                self.most_restrictive_existential = other.most_restrictive_existential
+            }
+            (Some(_), Some(_)) => {
+                self.most_restrictive_existential =
+                    self.most_restrictive_existential.min(other.most_restrictive_existential)
+            }
+        };
         match (self.reachable_placeholders.as_mut(), other.reachable_placeholders.as_ref()) {
             (None, None) | (Some(_), None) => (),
             (None, Some(theirs)) => self.reachable_placeholders = Some(*theirs),
@@ -340,27 +364,18 @@ pub(crate) fn rewrite_placeholder_outlives<'tcx>(
         let annotation = annotations[scc];
         debug!(?annotation);
 
-        // Placeholder regions have two special error conditions, both of which are
-        // handled later, in `RegionInference::check_bound_region()`.
-        if let Representative::Placeholder(p) = annotation.representative {
-            // Case 1: placeholder outlives another placeholder: requires no special treatment.
-
-            // Case 2: we are a placeholder for a bound region that outlived an existential
-            // that cannot name us. This will appear as `U(SCC('p)) < U('p)`, i.e. the placeholder
-            // is no longer nameable by its own SCC.
-            if annotation.max_nameable_universe().cannot_name(definitions[p].universe) {
-                debug!(
-                    "Placeholder {p:?} ({scc:?}) outlives existential that cannot name it {:?}!",
-                    annotation.max_nameable_univere_and_existential()
-                );
-                // No use forcing `'p: 'static`; that will only ever generate extra errors
-                continue;
-            }
-        }
-
         let Some((max_u, max_u_rvid)) = annotation.unnameable_placeholder() else {
             continue;
         };
+
+        // There is no point in forcing `'p: 'static` for a placeholder; that never works.
+        // Moreover, the ways this could have happend already error:
+        // 1. `'p: 'r` where `'r` is a different placeholder or a free region.
+        // 2. `'p: 'e` where `'e` is an existential that can't name `'p`.
+        if let Representative::Placeholder(p) = annotation.representative {
+            debug!("Skipping placeholder {p:?}: it already has some error!");
+            continue;
+        }
 
         debug!(
             "Placeholder universe {max_u:?} is too large for its SCC, represented by {:?}",
@@ -377,9 +392,11 @@ pub(crate) fn rewrite_placeholder_outlives<'tcx>(
             matches!(definitions[blame_to].origin, NllRegionVariableOrigin::Placeholder(_)),
             "{blame_to:?} should have been a placeholder!"
         );
+        // We avoid this case because the representative isn't a placeholder!
         assert!(
             max_u_rvid != annotation.representative.rvid(),
-            "Would have added a cyclic constraint to/from {max_u_rvid:?}. This should never happen!"
+            "Would have added a cyclic constraint to/from {:?}. This should never happen!",
+            annotation.representative
         );
 
         // FIXME: if we can extract a useful blame span here, future error
